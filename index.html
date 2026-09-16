@@ -1,0 +1,341 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-page-node-id="qvme5AVtJVmqpfDNCpNLOp">
+<head data-page-node-id="hmuHBG5cJ1S66srywAJebM">
+<meta charset="utf-8" data-page-node-id="e826m5vGGUfIOVHcvEF4dG" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" data-page-node-id="g0aGA5BRA4RDxC5UZV0D9d" />
+<title>诗境·山河 — 中国古典诗词三维地图教学系统</title>
+<link rel="stylesheet" href="./css/style.css" data-page-node-id="YvYkue8A6gCKl1VrQdN3LF" />
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "./vendor/three.module.js",
+    "three/addons/": "./vendor/jsm/"
+  }
+}
+</script>
+
+<script>
+/* ===========================================================================
+   启动兜底脚本（普通脚本，先于模块执行）
+   本应用是「数据 + 三维渲染」结构，初始化链条很长（加载 2MB 模块 → 解析地理
+   数据 → 建 79 根光柱 → 装配界面）。原先把整条链子暴露在模块顶层，任何一步
+   抛错都会让模块静默死掉，而加载页没有任何失败出口 —— 表现为「一直加载中」，
+   且不给任何原因。这里补上三件事：
+     1. 捕获全局错误与模块加载失败，把原因显示在加载页上；
+     2. 看门狗：超过 18 秒仍未启动完成，主动报出「卡在哪一步」；
+     3. 给出重试与跳过按钮，保证用户永远有出口。
+   =========================================================================== */
+(function () {
+  var STAGES = ['构建三维地形', '加载诗词数据', '生成地势起伏', '点亮诗境地标', '装配界面与题库'];
+  var lastStage = '构建三维地形';
+  var lastPct = 8;
+
+  window.__loadFailed = false;
+
+  function el(id) { return document.getElementById(id); }
+
+  /** 由主模块调用，报告当前进度。既让用户看到「在动」，也方便定位卡在哪一步。 */
+  window.__bootStage = function (text, pct) {
+    lastStage = text || lastStage;
+    if (typeof pct === 'number') lastPct = pct;
+    var sub = el('loaderSub');
+    if (sub) sub.textContent = lastStage;
+    var bar = el('loaderBarFill');
+    if (bar) bar.style.width = lastPct + '%';
+  };
+
+  window.__loadError = function (msg, kind) {
+    // 已经启动成功就不再打扰
+    if (window.__app || window.__loadFailed) return;
+    window.__loadFailed = true;
+
+    var box = el('loaderFail');
+    var text = el('lfMsg');
+    var hint = el('lfHint');
+    if (text) text.textContent = String(msg || '未知错误').slice(0, 400);
+    if (hint) {
+      if (kind === 'timeout') {
+        hint.innerHTML = '页面已等待 18 秒仍未完成初始化。<br/>' +
+          '最后停在：<b>' + lastStage + '</b>（' + lastPct + '%）。<br/>' +
+          '常见原因：网络较慢导致模块未加载完；显卡/浏览器禁用了 WebGL。';
+      } else if (kind === 'webgl') {
+        hint.innerHTML = '当前浏览器无法创建 WebGL 画布。<br/>' +
+          '请在浏览器设置中开启「硬件加速」，或改用 Chrome / Edge 打开。';
+      } else {
+        hint.innerHTML = '若以 file:// 直接打开会失败，请改用本地服务器：<br/>' +
+          '<b>python3 serve.py</b> 然后访问 http://127.0.0.1:8777/';
+      }
+    }
+    if (box) box.classList.remove('hidden');
+    var l = el('loader');
+    if (l) l.classList.add('failed');
+  };
+
+  // 全局兜底：模块顶层抛错、事件回调抛错都会走到这里
+  window.addEventListener('error', function (e) {
+    // 资源（img/script）加载失败没有 message，只处理真正的运行时错误
+    if (e && e.message) window.__loadError(e.message, 'runtime');
+  });
+  window.addEventListener('unhandledrejection', function (e) {
+    var r = e && e.reason;
+    window.__loadError((r && r.message) || r || 'Promise 未处理的拒绝', 'runtime');
+  });
+
+  // 看门狗
+  setTimeout(function () {
+    if (!window.__app) window.__loadError('初始化超时', 'timeout');
+  }, 18000);
+
+  // WebGL 预检：拿不到上下文时提前给出可读的原因，而不是让 THREE 抛一行栈
+  window.__hasWebGL = function () {
+    try {
+      var c = document.createElement('canvas');
+      return !!(window.WebGLRenderingContext &&
+        (c.getContext('webgl2') || c.getContext('webgl') || c.getContext('experimental-webgl')));
+    } catch (err) { return false; }
+  };
+
+  document.addEventListener('DOMContentLoaded', function () {
+    var sub = el('loaderSub');
+    var lf = el('lfRetry');
+    var sk = el('lfSkip');
+    if (lf) lf.onclick = function () { location.reload(); };
+    if (sk) sk.onclick = function () {
+      var l = el('loader');
+      if (l) { l.classList.add('done'); setTimeout(function () { l.remove(); }, 800); }
+    };
+
+    // ES Module 无法在 file:// 下加载，给出明确指引
+    if (location.protocol === 'file:') {
+      if (sub) sub.textContent = '需要本地服务器';
+      window.__loadError('以 file:// 打开时浏览器会拦截模块脚本', 'file');
+      return;
+    }
+    if (!window.__hasWebGL()) {
+      window.__loadError('无法创建 WebGL 上下文', 'webgl');
+      return;
+    }
+    if (sub) sub.textContent = '加载三维引擎与诗词数据…';
+  });
+})();
+</script>
+
+<script nomodule>
+/* 老到不支持 <script type="module"> 的浏览器：加载页会永远转下去，这里给一句话说明 */
+document.addEventListener('DOMContentLoaded', function () {
+  var sub = document.getElementById('loaderSub');
+  if (sub) sub.textContent = '当前浏览器过旧，不支持 ES Module，请使用新版 Chrome / Edge / Safari';
+});
+</script>
+</head>
+<body data-page-node-id="8xWmI5ZzO8VxLDe12UNC7z">
+
+<div id="stage" data-page-node-id="heDJwxAY9zWyZ0SjmmNX13">
+  <canvas id="scene" data-page-node-id="VVe2gE0pnPFlPpg7tRLcLJ"></canvas>
+  <div id="labelLayer" class="label-layer" data-page-node-id="HSmJF8BH41fFIhRnaD0XDT"></div>
+  <div class="vignette" data-page-node-id="AXosc5h03jtPp4qnOJH0bu"></div>
+</div>
+
+<!-- 顶部栏 -->
+<header class="topbar glass" data-page-node-id="nVuMCZ8Q8DsrBM2znx3fTN">
+  <div class="brand" data-page-node-id="ndXfynMCetdklcB3jwYGwP">
+    <div class="seal" data-page-node-id="kZba9U4d60oBzU6lTYdSIj">詩</div>
+    <div class="titles" data-page-node-id="M9XhnAiaO3DLzbZjkeFRFn">
+      <h1 data-page-node-id="cEUGV1oMhbb5SZhsHiQIDi">诗境 · 山河</h1>
+      <p data-page-node-id="diYXVMtEc8UMiQcazAUO1b">中国古典诗词三维地图 · 教学系统</p>
+    </div>
+  </div>
+
+  <div class="searchbox" data-page-node-id="06YCacXvEOjmHanSTTluiM">
+    <input id="searchInput" type="text" autocomplete="off"
+           placeholder="搜索诗名 / 作者 / 诗句 / 地名…（如「月」「杜甫」「白帝城」）" data-page-node-id="TAoov21OFjFarmupdeIElr" />
+    <button id="searchClear" class="icon-btn" title="清空" data-page-node-id="C7sexOQdJ5QC46cdycPngU">✕</button>
+    <div id="searchResults" class="search-results hidden" data-page-node-id="HP2SpY8IvBa0gWUxBwtR82"></div>
+  </div>
+
+  <nav class="modes" id="modeNav" data-page-node-id="fVhyiEs06cQg321rYfKn7f">
+    <button data-mode="explore" class="active" data-page-node-id="yjqMQdyChaBq4ZkNz6rCVB">探索</button>
+    <button data-mode="route" data-page-node-id="TI8VP0etgCa2AYv1Z0UjsG">行迹</button>
+    <button data-mode="class" data-page-node-id="AT43BPw5CyZWaDGBLmZRoD">课堂</button>
+  </nav>
+</header>
+
+<!-- 左栏：筛选 + 地点列表 -->
+<aside class="panel left glass" id="leftPanel" data-page-node-id="wUlkNKF62JsjjxpXyOWrzn">
+  <div class="panel-scroll" data-page-node-id="r2vaEGSsVMU4SOl7hGemt6">
+    <section class="filters" data-page-node-id="lyG23XDuMu2KLsDIHOTFTx">
+      <h3 data-page-node-id="6UVtdXDzTbDebqOumCfmjl">朝代轴 <span class="hint" data-page-node-id="l6tj0gvzW63hafA0yOd8R0">按时代筛选</span></h3>
+      <div class="chips" id="dynastyChips" data-page-node-id="wZlh189UqFdpSTYCXjWRYR"></div>
+      <h3 data-page-node-id="WpOX06qnBbCdfsuZc0uKdY">题材</h3>
+      <div class="chips" id="themeChips" data-page-node-id="vnN6DmqkULMQxVoYXW1Wvc"></div>
+      <h3 data-page-node-id="DFverIvEG7HVPpvkk7Y1xi">地域</h3>
+      <div class="chips" id="regionChips" data-page-node-id="UjHc1WayoBsimlhdKwAGUq"></div>
+      <div class="filter-actions" data-page-node-id="tUpssdCu3pnPVAN5TKFXoC">
+        <button id="btnResetFilter" class="mini" data-page-node-id="Pu5ARnBb9u2c9rsmejVALU">重置筛选</button>
+        <button id="btnAllEras" class="mini" data-page-node-id="m5qXAC8vXxYyH3yQ8RDLEH">全部朝代</button>
+      </div>
+    </section>
+
+    <section class="sitelist" data-page-node-id="FUDEa3kpupvtmPzVsJeecx">
+      <div class="list-head" data-page-node-id="11T52gv1IfKSsG7hN0mONS">
+        <span data-page-node-id="kN8UgY17LsNOVSkWFIvOOl">诗境地点</span>
+        <span class="badge" id="siteCount" data-page-node-id="ElHwjL90drEkGakOkG6Kmm">0</span>
+      </div>
+      <div class="list-body" id="siteList" data-page-node-id="shE65HD2fNltSUEgT0xNzn"></div>
+    </section>
+  </div>
+
+  <div class="stat-strip" id="statStrip" data-page-node-id="4DDxVuDjLeSIijqJ862wPH"></div>
+</aside>
+
+<!-- 右栏：诗词详情 / 地区介绍 -->
+<aside class="panel right glass" id="rightPanel" data-page-node-id="NjnuDEKIBeVj03aZUG0ECU">
+  <div id="detailBody" class="detail-body" data-page-node-id="mpcwCSGBFyoKHxaqIfPqqH">
+    <div class="empty-detail" data-page-node-id="XT6LLehUnwqrVUveqBvwhP">
+      <div class="empty-seal" data-page-node-id="vh0Ta8dE61RbNVKrMMLeP2">山<br data-page-node-id="8ndt71uwKK92yxvFhNulbc"/>河</div>
+      <p data-page-node-id="IuJIRM0WXquvVpQ9QjGyRP">点击地图上的光柱，或从左侧列表选择一处诗境</p>
+      <ul class="empty-tips" data-page-node-id="PFCuR2o9Cqnm2ZC8KpJ3d3">
+        <li data-page-node-id="ZxN0aLYUwTzxr6BMWg7lRR">拖动旋转 · 滚轮缩放 · 右键平移</li>
+        <li data-page-node-id="ripeGhJhyRuTeCraH5vRI6">单击省份可见该地区的诗词</li>
+        <li data-page-node-id="7I3Iw65URfVDV259Tu6fls">按 <kbd data-page-node-id="MbT4F7FKyHARMngEwEsC7l">空格</kbd> 播放巡游</li>
+      </ul>
+    </div>
+  </div>
+</aside>
+
+<!-- 抽屉展开按钮：独立于面板，用 fixed 定位常驻屏幕边缘，收起后不会跟着面板移出视野 -->
+<button class="panel-toggle" id="toggleLeft" title="收起 / 展开左侧筛选栏" aria-label="收起或展开左侧筛选栏">
+  <span class="pt-arrow">‹</span><span class="pt-label">筛 选</span>
+</button>
+<button class="panel-toggle" id="toggleRight" title="收起 / 展开右侧详情栏" aria-label="收起或展开右侧详情栏">
+  <span class="pt-arrow">›</span><span class="pt-label">诗 词 详 情</span>
+</button>
+
+<!-- 底部工具条 -->
+<footer class="bottombar glass" data-page-node-id="rpRegb5DzZOodOgCeW2gsF">
+  <div class="group" id="viewGroup" data-page-node-id="7RD45MlGH5uqx6ROOUnTK7">
+    <button data-view="reset" title="完整版图（含南海诸岛）" data-page-node-id="StAePaw7R22DKMuC4sDmZ7">全域</button>
+    <button data-view="mainland" title="聚焦大陆主体" data-page-node-id="kf2FTDmYCCAzhvDQu9Sziy">主陆</button>
+    <button data-view="top" title="正上方俯视" data-page-node-id="Mkshs8uJySm58jaAXhqtvT">俯视</button>
+    <button data-view="territory" title="低角度漫游视角" data-page-node-id="EbRtqNhwvFeeNPjOtgl2lq">漫游</button>
+    <button data-view="flat" class="toggle" title="在三维地势图与平面 2D 地图之间切换" data-page-node-id="OvmVNd6yuxW7LA9qjoXLUK">2D 平面</button>
+    <button data-view="spin" class="toggle" title="自动旋转" data-page-node-id="QpTakvryW6He8QzQZcuZGW0">自转</button>
+  </div>
+  <div class="divider" data-page-node-id="JChYHHB9iFPOtbYbqBOifF"></div>
+  <div class="group" id="layerGroup" data-page-node-id="UF07i7j001lSDAhlNXm85m">
+    <button data-layer="rivers" class="toggle on" title="显示长江、黄河、大运河" data-page-node-id="QpTakvryW6He8QzQZcuZGW">江河</button>
+    <button data-layer="labels" class="toggle on" title="显示地名标注" data-page-node-id="CQmW3BbSu5E8DgmHufqXQP">地名</button>
+    <button data-layer="clouds" class="toggle on" title="显示云海" data-page-node-id="nMbiWIL9uuJhaHzK7WG0P0">云海</button>
+    <button data-layer="voice" class="toggle" title="朗读诗句" data-page-node-id="fRWb5uzkABDcWTM9WhhVLR">朗读</button>
+  </div>
+  <div class="divider" data-page-node-id="DXdMzZuaNA8CgYGqTjyB4m"></div>
+  <div class="group tour" data-page-node-id="GLtPmwgkMywjCBDm2QsEQN">
+    <button id="btnTour" class="primary" title="自动巡游所有诗境（空格）" data-page-node-id="xcp5VhjZVkm524swSzdG8T">▶ 巡游</button>
+    <select id="tourScope" title="巡游范围" data-page-node-id="jTdnKa3HF0krBbAFg9Larr">
+      <option value="filtered" data-page-node-id="fn2w1cEspZD6PnCRsevN9i">当前筛选结果</option>
+      <option value="all" data-page-node-id="EbArTbB3vjRAQYphhZooke">全部诗境</option>
+      <option value="tang" data-page-node-id="ku1SRTLi03ZzbMOXc0h2wE">唐诗之路</option>
+      <option value="song" data-page-node-id="vqDJqG2kr05YGNKzTS0UDv">宋词之境</option>
+      <option value="border" data-page-node-id="JVhchsUwy2pIF8Eovtdda0">边塞烽烟</option>
+      <option value="water" data-page-node-id="7r6gjykCu4aUi8k2Kc9IQc">江南水乡</option>
+    </select>
+    <span class="progress" data-page-node-id="NHwIzwBqL153Uw7GIgrrdp"><i id="tourProgress" data-page-node-id="WYDtLtcnMvW3xAvyToGOoc"></i></span>
+    <span id="tourInfo" class="tour-info" data-page-node-id="HGGDWcMpP6ABpTPoTf9Mfm">待机</span>
+  </div>
+  <div class="divider" data-page-node-id="Bv7Bn5fA5fGCOmWp3rWIoO"></div>
+  <div class="group" id="classGroup" data-page-node-id="YMvyRM76LBOHQQISdLgJw7">
+    <button data-quiz="geo" title="给出诗句，在地图上点出它的诞生地" data-page-node-id="OxHZIW0C86ifRT1toB1GOR">看图识诗</button>
+    <button data-quiz="fill" title="补全诗句，四选一" data-page-node-id="i3s3Q7YsZJnmxG3ihwjhHx">补全诗句</button>
+    <button data-quiz="feihua" title="飞花令：说出含令字的诗句" data-page-node-id="rGhFOSTl5WtVss0wBF4cvm">飞花令</button>
+  </div>
+</footer>
+
+<!-- 底部：当前地区的诗词列表（点击地图省份后出现） -->
+<div id="regionBar" class="region-bar glass hidden">
+  <div class="rb-head">
+    <span class="rb-title" id="rbTitle">地区</span>
+    <span class="rb-sub" id="rbSub"></span>
+    <button class="icon-btn" id="rbClose" title="关闭列表">✕</button>
+  </div>
+  <div class="rb-list" id="rbList"></div>
+</div>
+
+<!-- 诗词详情弹窗（点击诗词列表中的作品后出现） -->
+<div id="poemModal" class="modal hidden">
+  <div class="modal-mask" id="poemModalMask"></div>
+  <div class="modal-card glass" role="dialog" aria-modal="true">
+    <button class="icon-btn modal-close" id="poemModalClose" title="关闭（Esc）">✕</button>
+    <div class="modal-body" id="poemModalBody"></div>
+  </div>
+</div>
+
+<!-- 课堂练习卡 -->
+<div id="quizCard" class="quiz-card glass hidden" data-page-node-id="9g5t1KHyxPOzWnUkaTwzVv">
+  <div class="quiz-head" data-page-node-id="xEncnhAmzD2FAnsXNMTUAH">
+    <span class="quiz-kind" id="quizKind" data-page-node-id="vcZuAdrArdhrCGF0gj2Oyd">看图识诗</span>
+    <span class="quiz-score" id="quizScore" data-page-node-id="sLr4dEaNFS2sDIqWNzWfV4"></span>
+    <button class="icon-btn" id="quizClose" data-page-node-id="HrTBuCXQXhjYES453lyQAR">✕</button>
+  </div>
+  <div class="quiz-body" id="quizBody" data-page-node-id="M34GnizRPiIaC1P08yzaTX"></div>
+  <div class="quiz-foot" data-page-node-id="jtOaTooZewmz0EnC21yTFj">
+    <button id="quizNext" class="mini primary-mini" data-page-node-id="7YHeusGGLqaqEuaKjWqOuZ">下一题 →</button>
+    <button id="quizQuit" class="mini" data-page-node-id="tgJdxNsy7PLHsPPieKtGnK">退出练习</button>
+  </div>
+</div>
+
+<!-- 行迹选择面板 -->
+<div id="routePanel" class="route-panel glass hidden" data-page-node-id="fhD2X65qI0t09cqvszpXMB">
+  <div class="rp-head" data-page-node-id="YuT43xr2Bo9YEpZCIlqv2G">
+    <span data-page-node-id="xqrahVsFtctAPkrC4zi8Th">诗人行迹</span>
+    <button class="icon-btn" id="routeClose" data-page-node-id="5p6yJxheqzxTfs8vLgUwWH">✕</button>
+  </div>
+  <div class="rp-body" id="routeList" data-page-node-id="Fs7v4OIEYxNoYwUsbDo3qa"></div>
+  <div class="rp-detail" id="routeDetail" data-page-node-id="L3zqN3cnKicdlamcIjx2cs"></div>
+</div>
+
+<!-- 悬停提示 -->
+<div id="hoverTip" class="hover-tip hidden" data-page-node-id="UVoIKr2kka4zbjw6fTI4Hl"></div>
+
+<!-- 右下角 HUD -->
+<div class="hud" data-page-node-id="D5G90zBdqd5x2EwzAXAGHj">
+  <div class="hud-row" data-page-node-id="cdkz0O6SEc1yYzlF4tcYsL"><span data-page-node-id="t3C7KpfHyjqn5Umu8H41pr">经度</span><b id="hudLon" data-page-node-id="SFIad0AzzPKqQZfEzZqdXx">—</b></div>
+  <div class="hud-row" data-page-node-id="4XkGA3Y2ezDsEneBAlHt2d"><span data-page-node-id="BmreCJ8wyMv0pENLAHCF21">纬度</span><b id="hudLat" data-page-node-id="SuMPtovMafeKxUDBzOODLH">—</b></div>
+  <div class="hud-row" data-page-node-id="pfkVRIw2TaHeRTbQvqp3HZ"><span data-page-node-id="SAitCZtA01eEN0zLmgruNh">朝代</span><b id="hudEra" data-page-node-id="RTC5lJeOQz2IUoHMHJPSUU">全部</b></div>
+  <div class="hud-note" data-page-node-id="0cqj3a80Dz3g21VUnGxnPG">底图依据中国标准地图 Albers 投影绘制<br data-page-node-id="Ew0xQSlPBGZuvccsEhwBiw"/>含台湾省、香港特别行政区、澳门特别行政区及南海诸岛</div>
+</div>
+
+<div id="toast" class="toast" data-page-node-id="CnRgcXD8N0a5aSwDzUINW7"></div>
+
+<div id="loader" data-page-node-id="wcavkr3hOvPislNEg2vaEL">
+  <div class="loader-inner" data-page-node-id="QQ7TrXfoOMAo9bBj6vIMHk">
+    <div class="loader-seal" data-page-node-id="3QgmOV9T77HA1evYtVM53G">詩</div>
+    <div class="loader-text" data-page-node-id="ejmUaSE5fwYtoojJWggZrf">正在展开山河画卷…</div>
+    <div class="loader-bar" data-page-node-id="rTnQkKQQcPWBtAFkGs3EAa"><i id="loaderBarFill" data-page-node-id="Vdh6annuwFmxYf6ZhYB2Yp"></i></div>
+    <div class="loader-sub" id="loaderSub" data-page-node-id="BonwY9TZMBqbBGACBN2hPi">构建三维地形</div>
+
+    <div id="loaderFail" class="loader-fail hidden">
+      <div class="lf-title">未能启动</div>
+      <div class="lf-msg" id="lfMsg"></div>
+      <div class="lf-hint" id="lfHint"></div>
+      <div class="lf-actions">
+        <button id="lfRetry">重新加载</button>
+        <button id="lfSkip">先进入页面</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<noscript data-page-node-id="9rD7tMBWve5sgCR2jDtUy8"><p style="color:#fff;padding:40px" data-page-node-id="lgV09SbhvHeAUKjqeK6QSX">本应用需要启用 JavaScript。</p></noscript>
+
+<script type="module">
+/* 用动态 import 而非 <script src>：模块解析失败（路径错、MIME 不对、浏览器不支持
+   import map）在静态 script 标签下是静默的，页面只会一直停在加载页。
+   动态 import 能把失败原因交回给 __loadError 显示出来。 */
+import('./js/main.js').catch(function (err) {
+  var msg = (err && err.message) ? err.message : String(err);
+  window.__loadError(msg, 'import');
+});
+</script>
+</body>
+</html>

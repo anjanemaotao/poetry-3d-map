@@ -1,0 +1,732 @@
+/* ===========================================================
+   诗境·山河 —— 中国古典诗词三维地图教学系统
+   =========================================================== */
+:root {
+  --ink: #05090f;
+  --ink2: #08131f;
+  --glass: rgba(9, 19, 31, 0.66);
+  --glass-2: rgba(12, 24, 38, 0.82);
+  --line: rgba(232, 192, 122, 0.18);
+  --line-2: rgba(120, 190, 220, 0.16);
+  --gold: #e8c07a;
+  --gold-2: #ffe6b0;
+  --jade: #4fd1b0;
+  --cyan: #6fd6ff;
+  --paper: #f2ead8;
+  --paper-dim: rgba(242, 234, 216, 0.66);
+  --red: #e2705a;
+  --ui: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans SC", sans-serif;
+  --serif: "Songti SC", "STSong", "Noto Serif SC", "SimSun", "Source Han Serif SC", serif;
+  --shadow: 0 18px 48px rgba(0, 0, 0, 0.55);
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0; padding: 0; height: 100%; width: 100%;
+  background: var(--ink);
+  color: var(--paper);
+  font-family: var(--ui);
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+
+button, input, select { font-family: inherit; color: inherit; outline: none; }
+kbd {
+  font-family: var(--ui); font-size: 10px; padding: 1px 5px; border-radius: 4px;
+  background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.18);
+}
+
+/**
+ * 通用隐藏工具类。
+ * 必须有 !important：本文件里各组件（.search-results / .route-panel / .quiz-card …）
+ * 都定义了各自的 display，若只写 `.hidden { display: none }`，同特异度下后出现的
+ * 组件规则会把它盖掉，导致 JS 明明加上了 hidden 类、元素却依然可见。
+ */
+.hidden { display: none !important; }
+
+/* ---------- 舞台 ---------- */
+#stage { position: fixed; inset: 0; }
+#scene { display: block; width: 100%; height: 100%; }
+
+.vignette {
+  position: fixed; inset: 0; pointer-events: none;
+  background:
+    radial-gradient(ellipse at 50% 45%, rgba(0,0,0,0) 42%, rgba(0,0,0,0.55) 100%),
+    linear-gradient(180deg, rgba(5,9,15,0.72) 0%, rgba(5,9,15,0) 18%, rgba(5,9,15,0) 78%, rgba(5,9,15,0.78) 100%);
+  mix-blend-mode: multiply;
+}
+
+.label-layer { position: fixed; inset: 0; pointer-events: none; overflow: hidden; }
+
+.map-label {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  pointer-events: auto;
+  cursor: pointer;
+  white-space: nowrap;
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  padding: 1px 7px 2px;
+  border-radius: 10px;
+  color: var(--gold-2);
+  background: rgba(6, 14, 24, 0.5);
+  border: 1px solid rgba(232, 192, 122, 0.28);
+  backdrop-filter: blur(3px);
+  transition: transform .18s ease, background .18s ease, opacity .25s ease;
+  text-shadow: 0 0 10px rgba(0,0,0,0.9);
+}
+.map-label::before {
+  content: ""; position: absolute; left: 50%; top: 100%;
+  width: 1px; height: 9px; background: linear-gradient(rgba(232,192,122,0.7), rgba(232,192,122,0));
+}
+.map-label.era-xy { color: #cbb9ff; border-color: rgba(185,166,255,0.35); }
+.map-label.era-hw { color: #a8dcff; border-color: rgba(126,200,255,0.35); }
+.map-label.era-jn { color: #9ff0dd; border-color: rgba(111,232,207,0.35); }
+.map-label.era-tang { color: #ffdca0; border-color: rgba(255,198,94,0.4); }
+.map-label.era-song { color: #ffb6a2; border-color: rgba(255,143,118,0.4); }
+.map-label.era-yh { color: #e0c4ff; border-color: rgba(211,166,255,0.4); }
+.map-label:hover { background: rgba(20, 40, 60, 0.85); transform: translate(-50%, -50%) scale(1.12); z-index: 5; }
+.map-label.selected {
+  background: linear-gradient(180deg, rgba(232,192,122,0.95), rgba(200,150,60,0.9));
+  color: #101a12; border-color: #fff2cf; font-weight: 700;
+  transform: translate(-50%, -50%) scale(1.16); z-index: 6;
+}
+.map-label.dim { opacity: 0.32; }
+
+/* ---------- 玻璃面板 ---------- */
+.glass {
+  background: var(--glass);
+  backdrop-filter: blur(16px) saturate(1.3);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow);
+  border-radius: 14px;
+}
+
+/* ---------- 顶栏 ---------- */
+.topbar {
+  position: fixed; left: 16px; right: 16px; top: 14px; height: 64px;
+  display: flex; align-items: center; gap: 18px; padding: 0 16px; z-index: 40;
+}
+.brand { display: flex; align-items: center; gap: 12px; flex-shrink: 0; }
+.seal {
+  width: 40px; height: 40px; border-radius: 9px;
+  display: grid; place-items: center;
+  font-family: var(--serif); font-size: 24px; color: var(--gold-2);
+  background: linear-gradient(150deg, rgba(180,40,40,0.85), rgba(120,20,20,0.85));
+  border: 1px solid rgba(255, 220, 170, 0.55);
+  box-shadow: 0 0 18px rgba(226, 112, 90, 0.45), inset 0 0 12px rgba(255,200,150,0.25);
+}
+.titles h1 {
+  margin: 0; font-family: var(--serif); font-size: 20px; font-weight: 600;
+  letter-spacing: 0.22em; color: var(--gold-2);
+  text-shadow: 0 0 20px rgba(232,192,122,0.35);
+}
+.titles p { margin: 2px 0 0; font-size: 11px; letter-spacing: 0.16em; color: rgba(242,234,216,0.5); }
+
+/* min-width: 0 不能省：flex item 默认 min-width: auto，输入框的默认宽度会把
+   搜索框顶住不让收缩，窄屏下顶栏就被撑破（实测 480 宽溢出 47px）。 */
+.searchbox { position: relative; flex: 1; max-width: 520px; min-width: 0; }
+.searchbox input {
+  width: 100%; height: 38px; padding: 0 36px 0 14px;
+  border-radius: 19px; border: 1px solid var(--line-2);
+  background: rgba(4, 12, 20, 0.6);
+  font-size: 13px; letter-spacing: 0.04em; color: var(--paper);
+  transition: border-color .2s, box-shadow .2s;
+}
+.searchbox input::placeholder { color: rgba(242,234,216,0.38); }
+.searchbox input:focus { border-color: rgba(232,192,122,0.55); box-shadow: 0 0 0 3px rgba(232,192,122,0.1); }
+.icon-btn {
+  background: transparent; border: 0; cursor: pointer; color: var(--paper-dim);
+  font-size: 13px; padding: 4px 8px; border-radius: 6px;
+}
+.icon-btn:hover { color: var(--gold-2); background: rgba(255,255,255,0.07); }
+#searchClear { position: absolute; right: 4px; top: 5px; display: none; }
+#searchClear.show { display: block; }
+
+.search-results {
+  position: absolute; top: 46px; left: 0; right: 0; max-height: 52vh; overflow-y: auto;
+  background: var(--glass-2); backdrop-filter: blur(18px);
+  border: 1px solid var(--line); border-radius: 12px; padding: 6px; z-index: 60;
+}
+.sr-item {
+  display: flex; flex-direction: column; gap: 2px; padding: 7px 10px; border-radius: 8px; cursor: pointer;
+}
+.sr-item:hover { background: rgba(232,192,122,0.12); }
+.sr-item .sr-t { font-size: 13px; color: var(--paper); }
+.sr-item .sr-s { font-size: 11px; color: rgba(242,234,216,0.5); }
+.sr-item .sr-k { font-size: 10px; color: var(--gold); letter-spacing: 0.1em; }
+.sr-empty { padding: 14px; text-align: center; font-size: 12px; color: rgba(242,234,216,0.45); }
+
+.modes { display: flex; gap: 4px; padding: 3px; border-radius: 10px; background: rgba(4,12,20,0.6); border: 1px solid var(--line-2); flex-shrink: 0; }
+.modes button {
+  border: 0; background: transparent; color: var(--paper-dim); cursor: pointer;
+  font-size: 12.5px; letter-spacing: 0.12em; padding: 7px 16px; border-radius: 8px;
+  transition: all .18s;
+}
+.modes button:hover { color: var(--gold-2); }
+.modes button.active {
+  background: linear-gradient(180deg, rgba(232,192,122,0.9), rgba(190,142,58,0.9));
+  color: #14100a; font-weight: 600;
+}
+
+/* ---------- 侧栏 ---------- */
+.panel {
+  position: fixed; top: 88px; bottom: 96px; z-index: 35;
+  display: flex; flex-direction: column; overflow: hidden;
+  transition: transform .32s cubic-bezier(.4,0,.2,1), bottom .3s ease;
+}
+.panel.left { left: 16px; width: 272px; }
+.panel.right { right: 16px; width: 404px; }
+.panel.collapsed.left { transform: translateX(-284px); }
+.panel.collapsed.right { transform: translateX(420px); }
+
+/**
+ * 底部诗词条打开时，左右两栏让出它的高度。
+ *
+ * 诗词条 z 44、宽 980 且左右居中，与两栏（z 35）在底部约 165px 的高度上重叠 ——
+ * 实测压住右栏 180px 宽（「代表篇目」那几行被切掉）、左栏 55px 宽、行迹面板 8.5k px²。
+ * 让两栏抬高，而不是让诗词条缩窄：诗词条是用户此刻要看的内容（刚点了省份），
+ * 两栏是可滚动的常驻工具，让位代价小得多。
+ * 高度由 JS 实测后写进 --rb-h（空状态与有卡片时高度不同）。
+ */
+body.rb-open .panel { bottom: calc(96px + var(--rb-h, 176px)); }
+
+/**
+ * 练习卡打开时，两栏同样整体上移。
+ *
+ * 卡片是通栏的（见 .quiz-card），与两栏在**水平方向必然相交**，所以只能竖向让位。
+ * --qc-h 由 JS 用 ResizeObserver 按卡片实测高度写入 —— 题目、选项、反馈区、
+ * 飞花令输入框都会让卡片长高变矮，写死一个值一定会在某个题型上露馅。
+ *
+ * 写在 body.rb-open 规则之后：万一两个类同时存在（正常流程不会 ——
+ * startQuiz 会先 hideRegionBar），后写的这条胜出，卡片优先级更高是对的。
+ */
+body.quiz-open .panel,
+body.quiz-open .route-panel { bottom: calc(82px + var(--qc-h, 280px) + 12px); }
+
+/**
+ * 抽屉开关。
+ *
+ * 必须放在面板**外面**并用 fixed 定位：面板收起靠的是 `transform: translateX()`，
+ * 而 transform 会给后代建立新的包含块 —— 开关若留在面板内部，会跟着一起平移出
+ * 屏幕（左栏收到 x≈5px、右栏收到 x≈W-1px，两者都只剩一两个像素可见），
+ * 于是「收起后再也找不到展开按钮」。
+ *
+ * 位置由 JS 按面板实际宽度设置（见 ui.js 的 syncPanelToggles），
+ * 这样各个响应式断点都不用单独写一份媒体查询。
+ */
+.panel-toggle {
+  position: fixed; top: 50%; transform: translateY(-50%);
+  width: 24px; height: 58px; padding: 0; z-index: 36;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
+  border: 1px solid var(--line); background: var(--glass-2); color: var(--gold);
+  cursor: pointer; font-size: 13px; line-height: 1;
+  backdrop-filter: blur(10px);
+  transition: left .32s cubic-bezier(.4,0,.2,1), right .32s cubic-bezier(.4,0,.2,1),
+              width .32s cubic-bezier(.4,0,.2,1), background .18s, color .18s, box-shadow .18s;
+}
+#toggleLeft { border-radius: 0 9px 9px 0; border-left: 0; }
+#toggleRight { border-radius: 9px 0 0 9px; border-right: 0; }
+.panel-toggle .pt-label { display: none; font-size: 10.5px; letter-spacing: 0.22em; writing-mode: vertical-rl; }
+.panel-toggle:hover { background: rgba(232,192,122,0.22); color: #fff; }
+
+/* 收起态：开关贴在屏幕边缘，加宽并显示竖排文字，保证一眼能找到 */
+body.hide-left #toggleLeft,
+body.hide-right #toggleRight {
+  width: 30px; height: 96px;
+  background: linear-gradient(180deg, rgba(232,192,122,0.26), rgba(232,192,122,0.14));
+  border-color: rgba(232,192,122,0.55);
+  box-shadow: 0 0 22px rgba(232,192,122,0.28);
+  animation: toggleNudge 2.6s ease-in-out infinite;
+}
+body.hide-left #toggleLeft .pt-label,
+body.hide-right #toggleRight .pt-label { display: block; }
+@keyframes toggleNudge {
+  0%, 100% { box-shadow: 0 0 16px rgba(232,192,122,0.22); }
+  50% { box-shadow: 0 0 30px rgba(232,192,122,0.45); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .panel-toggle { transition: none; }
+  body.hide-left #toggleLeft, body.hide-right #toggleRight { animation: none; }
+}
+
+.panel-scroll { flex: 1; overflow-y: auto; padding: 14px 14px 6px; }
+
+.panel h3 {
+  margin: 14px 0 8px; font-size: 11px; font-weight: 500; letter-spacing: 0.2em;
+  color: rgba(242,234,216,0.55); text-transform: uppercase;
+  display: flex; align-items: center; gap: 8px;
+}
+.panel h3:first-child { margin-top: 2px; }
+.panel h3 .hint { font-size: 10px; letter-spacing: 0; color: rgba(242,234,216,0.32); }
+
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chips button {
+  border: 1px solid rgba(255,255,255,0.12); background: rgba(255,255,255,0.045);
+  color: var(--paper-dim); cursor: pointer; font-size: 11.5px;
+  padding: 5px 10px; border-radius: 13px; transition: all .16s; letter-spacing: 0.05em;
+}
+.chips button:hover { border-color: rgba(232,192,122,0.5); color: var(--gold-2); }
+.chips button.on {
+  background: linear-gradient(180deg, rgba(232,192,122,0.92), rgba(190,142,58,0.92));
+  color: #17120a; border-color: #ffe9bd; font-weight: 600;
+}
+.chips button[data-era] { position: relative; padding-left: 18px; }
+.chips button[data-era]::before {
+  content: ""; position: absolute; left: 7px; top: 50%; margin-top: -3px;
+  width: 6px; height: 6px; border-radius: 50%; background: currentColor; opacity: 0.85;
+}
+.chips button.on[data-era]::before { background: #17120a; }
+
+.filter-actions { display: flex; gap: 8px; margin-top: 12px; }
+.mini {
+  flex: 1; border: 1px solid var(--line-2); background: rgba(255,255,255,0.04);
+  color: var(--paper-dim); font-size: 11.5px; padding: 7px 0; border-radius: 8px; cursor: pointer;
+  transition: all .16s;
+}
+.mini:hover { color: var(--gold-2); border-color: rgba(232,192,122,0.5); }
+.primary-mini {
+  background: linear-gradient(180deg, rgba(232,192,122,0.92), rgba(190,142,58,0.92));
+  color: #17120a; font-weight: 600; border-color: #ffe9bd;
+}
+
+.sitelist { margin-top: 16px; border-top: 1px solid rgba(255,255,255,0.07); padding-top: 12px; }
+.list-head {
+  display: flex; align-items: center; justify-content: space-between;
+  font-size: 11px; letter-spacing: 0.2em; color: rgba(242,234,216,0.55); margin-bottom: 8px;
+}
+.badge {
+  background: rgba(232,192,122,0.18); color: var(--gold-2); border-radius: 9px;
+  padding: 1px 8px; font-size: 11px; letter-spacing: 0;
+}
+.list-body { display: flex; flex-direction: column; gap: 4px; }
+.site-row {
+  display: flex; align-items: center; gap: 9px; padding: 7px 9px; border-radius: 9px;
+  cursor: pointer; border: 1px solid transparent; transition: all .15s;
+}
+.site-row:hover { background: rgba(232,192,122,0.1); border-color: rgba(232,192,122,0.28); }
+.site-row.active { background: rgba(232,192,122,0.18); border-color: rgba(232,192,122,0.6); }
+.site-row .dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+.site-row .rn { font-size: 13px; letter-spacing: 0.06em; }
+.site-row .rs { font-size: 10.5px; color: rgba(242,234,216,0.42); margin-left: auto; white-space: nowrap; }
+.site-row.visited .rn::after { content: " ✓"; color: var(--jade); font-size: 11px; }
+
+.stat-strip {
+  border-top: 1px solid rgba(255,255,255,0.07); padding: 9px 14px;
+  display: flex; justify-content: space-between; font-size: 10.5px;
+  color: rgba(242,234,216,0.5); letter-spacing: 0.06em;
+}
+.stat-strip b { color: var(--gold-2); font-weight: 600; }
+
+/* ---------- 详情面板 ---------- */
+.detail-body { flex: 1; overflow-y: auto; padding: 16px 18px 18px; }
+.empty-detail { text-align: center; padding: 40px 16px; color: rgba(242,234,216,0.45); }
+.empty-seal {
+  font-family: var(--serif); font-size: 30px; line-height: 1.15; color: rgba(232,192,122,0.45);
+  border: 1px solid rgba(232,192,122,0.25); border-radius: 12px;
+  width: 74px; padding: 10px 0; margin: 0 auto 20px; letter-spacing: 0.1em;
+}
+.empty-detail p { font-size: 13px; margin: 0 0 18px; }
+.empty-tips { list-style: none; padding: 0; margin: 0; font-size: 11.5px; line-height: 2.1; }
+
+.d-head { border-bottom: 1px solid rgba(255,255,255,0.08); padding-bottom: 12px; margin-bottom: 14px; }
+.d-title { font-family: var(--serif); font-size: 25px; letter-spacing: 0.14em; color: var(--gold-2); }
+.d-sub { font-size: 11.5px; letter-spacing: 0.1em; color: rgba(242,234,216,0.5); margin-top: 6px; }
+.d-tags { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 9px; }
+.d-tags span {
+  font-size: 10.5px; padding: 2px 8px; border-radius: 9px;
+  border: 1px solid rgba(111,214,255,0.3); color: #a8e4ff; background: rgba(111,214,255,0.08);
+}
+.d-tags span.era { border-color: rgba(232,192,122,0.4); color: var(--gold-2); background: rgba(232,192,122,0.1); }
+.d-tags span.lv { border-color: rgba(79,209,176,0.4); color: #9df0d8; background: rgba(79,209,176,0.08); }
+
+.d-brief { font-size: 12px; line-height: 1.85; color: rgba(242,234,216,0.72); margin-bottom: 14px; }
+.d-brief b { color: var(--gold); font-weight: 500; }
+
+/* 诗篇多的站点（长安 13 首、课内诵读 77 首）标签会排成很多行，把正文挤出视野。
+   限高并允许内部滚动，最多显示两行。 */
+.poem-tabs { display: flex; gap: 5px; margin-bottom: 12px; flex-wrap: wrap; max-height: 56px; overflow-y: auto; }
+.poem-tabs button {
+  border: 1px solid rgba(255,255,255,0.12); background: rgba(255,255,255,0.04);
+  color: var(--paper-dim); font-size: 11px; padding: 4px 10px; border-radius: 12px; cursor: pointer;
+}
+.poem-tabs button.on { background: rgba(232,192,122,0.85); color: #17120a; border-color: #ffe9bd; font-weight: 600; }
+
+.poem-card { margin-bottom: 20px; }
+.poem-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 4px; }
+.poem-title { font-family: var(--serif); font-size: 19px; color: var(--gold-2); letter-spacing: 0.1em; }
+.poem-meta { font-size: 11.5px; color: rgba(242,234,216,0.5); letter-spacing: 0.08em; }
+.poem-form { font-size: 10.5px; color: rgba(111,214,255,0.8); border: 1px solid rgba(111,214,255,0.25); padding: 0 6px; border-radius: 8px; }
+.poem-lv { font-size: 10.5px; color: #9df0d8; border: 1px solid rgba(79,209,176,0.3); padding: 0 6px; border-radius: 8px; }
+
+.poem-tools { display: flex; gap: 6px; margin: 10px 0 12px; }
+.poem-tools button {
+  border: 1px solid var(--line-2); background: rgba(255,255,255,0.04); color: var(--paper-dim);
+  font-size: 11px; padding: 4px 10px; border-radius: 12px; cursor: pointer;
+}
+.poem-tools button:hover { color: var(--gold-2); border-color: rgba(232,192,122,0.45); }
+.poem-tools button.on { background: rgba(79,209,176,0.18); color: #9df0d8; border-color: rgba(79,209,176,0.5); }
+
+.poem-body {
+  font-family: var(--serif);
+  color: var(--paper);
+  border-top: 1px solid rgba(255,255,255,0.07);
+  border-bottom: 1px solid rgba(255,255,255,0.07);
+  padding: 14px 4px;
+}
+.poem-body.vertical {
+  writing-mode: vertical-rl; text-orientation: upright;
+  width: 100%; max-width: 100%; box-sizing: border-box;
+  height: 320px; overflow-x: auto; overflow-y: hidden;
+  font-size: 20px; line-height: 2.0; letter-spacing: 0.1em;
+  text-shadow: 0 0 18px rgba(232,192,122,0.22);
+  scroll-behavior: smooth;
+}
+.poem-body.vertical .vline { display: block; }
+.poem-body.vertical .vline.gap { margin-left: 1.1em; }
+.poem-body.horizontal {
+  font-size: 18px; line-height: 2.05; letter-spacing: 0.09em;
+  text-shadow: 0 0 18px rgba(232,192,122,0.22);
+}
+.poem-body.horizontal .vline { display: inline; }
+.poem-body.horizontal .vline.gap { display: block; margin-top: 0.25em; }
+
+.trans-box { margin-top: 10px; display: none; }
+.trans-box.show { display: block; }
+.trans-line { font-size: 12px; line-height: 1.9; color: rgba(242,234,216,0.6); padding-left: 12px; border-left: 2px solid rgba(111,214,255,0.3); margin-bottom: 5px; }
+
+.notes-box { margin-top: 14px; }
+.notes-box h4, .appr-box h4 {
+  font-size: 11px; letter-spacing: 0.2em; color: var(--gold); font-weight: 500; margin: 0 0 8px;
+  display: flex; align-items: center; gap: 8px;
+}
+.notes-box h4::after, .appr-box h4::after { content: ""; flex: 1; height: 1px; background: rgba(232,192,122,0.22); }
+.note-item { font-size: 12px; line-height: 1.85; color: rgba(242,234,216,0.66); margin-bottom: 3px; }
+.note-item b { color: var(--gold-2); font-weight: 500; }
+.appr-box { margin-top: 14px; }
+.appr-box p { font-size: 12px; line-height: 1.95; color: rgba(242,234,216,0.7); margin: 0; text-align: justify; }
+
+.d-actions { display: flex; gap: 8px; margin-top: 18px; padding-top: 14px; border-top: 1px solid rgba(255,255,255,0.07); }
+.d-actions button { flex: 1; }
+
+/* ---------- 底栏 ---------- */
+.bottombar {
+  position: fixed; left: 50%; transform: translateX(-50%); bottom: 14px;
+  height: 56px; display: flex; align-items: center; gap: 12px; padding: 0 14px; z-index: 40;
+  max-width: calc(100vw - 32px); overflow-x: auto;
+}
+.bottombar .group { display: flex; align-items: center; gap: 5px; flex-shrink: 0; }
+.bottombar .divider { width: 1px; height: 26px; background: rgba(255,255,255,0.1); flex-shrink: 0; }
+.bottombar button {
+  border: 1px solid rgba(255,255,255,0.12); background: rgba(255,255,255,0.045);
+  color: var(--paper-dim); font-size: 11.5px; padding: 7px 12px; border-radius: 9px;
+  cursor: pointer; white-space: nowrap; transition: all .16s; letter-spacing: 0.06em;
+}
+.bottombar button:hover { color: var(--gold-2); border-color: rgba(232,192,122,0.45); }
+.bottombar button.toggle.on {
+  background: rgba(79,209,176,0.18); color: #9df0d8; border-color: rgba(79,209,176,0.55);
+}
+.bottombar button.primary {
+  background: linear-gradient(180deg, rgba(232,192,122,0.95), rgba(190,142,58,0.95));
+  color: #17120a; font-weight: 600; border-color: #ffe9bd;
+}
+.bottombar button.primary.playing { background: linear-gradient(180deg, #ff9b7a, #d35a3c); color: #1a0d08; }
+.bottombar select {
+  background: rgba(4,12,20,0.7); border: 1px solid var(--line-2); border-radius: 9px;
+  font-size: 11.5px; padding: 6px 8px; cursor: pointer;
+}
+.progress { width: 66px; height: 4px; border-radius: 2px; background: rgba(255,255,255,0.12); overflow: hidden; }
+.progress i { display: block; height: 100%; width: 0%; background: linear-gradient(90deg, var(--jade), var(--gold)); transition: width .3s; }
+.tour-info { font-size: 11px; color: rgba(242,234,216,0.55); min-width: 128px; white-space: nowrap; }
+
+/* ---------- 底部：地区诗词列表 ---------- */
+/* 点击地图省份后出现，位于底栏之上。横向排布诗篇卡片，点卡片开详情弹窗。 */
+.region-bar {
+  position: fixed; left: 50%; transform: translateX(-50%); bottom: 82px;
+  width: min(980px, calc(100vw - 40px)); max-height: 46vh;
+  display: flex; flex-direction: column; z-index: 44; padding: 10px 14px 12px;
+}
+.rb-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 9px; }
+.rb-title { font-family: var(--serif); font-size: 17px; letter-spacing: 0.12em; color: var(--gold-2); }
+.rb-sub { font-size: 11px; letter-spacing: 0.08em; color: rgba(242,234,216,0.5); }
+.rb-head .icon-btn { margin-left: auto; align-self: center; }
+
+.rb-list {
+  display: flex; gap: 9px; overflow-x: auto; overflow-y: hidden;
+  padding-bottom: 4px; min-height: 88px;
+}
+.rb-empty { font-size: 12px; color: rgba(242,234,216,0.45); padding: 26px 4px; }
+.rb-card {
+  flex: 0 0 210px; text-align: left; cursor: pointer;
+  border: 1px solid rgba(255,255,255,0.12); border-radius: 11px;
+  background: rgba(255,255,255,0.04); padding: 9px 11px;
+  transition: all .16s; display: flex; flex-direction: column; gap: 4px;
+}
+.rb-card:hover { border-color: rgba(232,192,122,0.55); background: rgba(232,192,122,0.1); transform: translateY(-2px); }
+.rb-card .rc-t {
+  font-family: var(--serif); font-size: 14.5px; letter-spacing: 0.06em; color: var(--gold-2);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.rb-card .rc-a { font-size: 11px; color: rgba(242,234,216,0.6); }
+.rb-card .rc-l {
+  font-family: var(--serif); font-size: 12px; line-height: 1.55; color: rgba(242,234,216,0.5);
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+
+/* ---------- 诗词详情弹窗 ---------- */
+.modal { position: fixed; inset: 0; z-index: 120; display: grid; place-items: center; }
+.modal-mask { position: absolute; inset: 0; background: rgba(2,6,11,0.62); backdrop-filter: blur(3px); }
+.modal-card {
+  position: relative; z-index: 1;
+  width: min(760px, calc(100vw - 40px)); max-height: 86vh;
+  display: flex; flex-direction: column; overflow: hidden;
+  animation: modalIn .26s cubic-bezier(.2,.8,.3,1);
+}
+@keyframes modalIn { from { opacity: 0; transform: translateY(16px) scale(.985); } to { opacity: 1; transform: none; } }
+.modal-close { position: absolute; right: 8px; top: 8px; z-index: 2; font-size: 15px; }
+.modal-body { flex: 1; overflow-y: auto; padding: 20px 24px 22px; }
+.modal-body .d-head { margin-bottom: 12px; }
+
+/* ---------- 练习卡 ---------- */
+.quiz-card {
+  /* 通栏浮层，在**视口**里居中；宽度只受视口约束，不迁就侧栏。
+   *
+   * 曾经的写法是把卡片挤在「两侧栏之间」（width: calc(100vw - 左栏 - 右栏 - 24px)）。
+   * 那是错的：窄屏上两栏各占 ~50vw，这个减法算出**负数** —— 而 CSS 里 width 不接受负值，
+   * 整条声明在计算值阶段失效，卡片回退成 shrink-to-fit，实测 390 宽只剩 163px：
+   * 文字竖排成一列、高度反而涨到 468px，比视口还高。
+   * 而且「算负数」这件事不会报错，只有真去量宽度才会发现。
+   *
+   * 侧栏的避让改由**竖向让位**解决（见 body.quiz-open 规则）：
+   * 卡片是此刻用户要操作的东西，侧栏是可滚动的常驻工具，让侧栏矮一点代价最小 ——
+   * 这与诗词条打开时侧栏让位的处理（body.rb-open）是同一套思路。
+   */
+  position: fixed;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(560px, calc(100vw - 24px));
+  bottom: 82px; z-index: 45; padding: 14px 16px 12px;
+}
+/* 隐藏统一由文件顶部的 .hidden 工具类负责，组件无需再各写一条 */
+.quiz-head { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+.quiz-kind {
+  font-size: 11px; letter-spacing: 0.2em; color: #17120a; font-weight: 700;
+  background: linear-gradient(180deg, var(--gold-2), var(--gold)); padding: 2px 10px; border-radius: 10px;
+}
+.quiz-score { font-size: 12px; color: var(--jade); letter-spacing: 0.06em; }
+.quiz-head .icon-btn { margin-left: auto; }
+.quiz-prompt {
+  font-family: var(--serif); font-size: 20px; letter-spacing: 0.1em; color: var(--gold-2);
+  text-align: center; padding: 12px 0 14px; line-height: 1.7;
+}
+.quiz-hint { font-size: 11.5px; color: rgba(242,234,216,0.5); text-align: center; margin-bottom: 12px; }
+.quiz-choices { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.quiz-choices button {
+  border: 1px solid var(--line-2); background: rgba(255,255,255,0.045); color: var(--paper);
+  font-size: 13px; padding: 10px 12px; border-radius: 10px; cursor: pointer; text-align: left;
+  transition: all .16s; font-family: var(--serif); letter-spacing: 0.05em;
+}
+.quiz-choices button:hover { border-color: rgba(232,192,122,0.5); background: rgba(232,192,122,0.1); }
+.quiz-choices button.right { background: rgba(79,209,176,0.22); border-color: var(--jade); color: #d6fff4; }
+.quiz-choices button.wrong { background: rgba(226,112,90,0.22); border-color: var(--red); color: #ffdcd4; }
+.quiz-choices button:disabled { cursor: default; }
+.quiz-feedback { margin-top: 12px; font-size: 12px; line-height: 1.85; color: rgba(242,234,216,0.75); display: none; }
+.quiz-feedback.show { display: block; }
+.quiz-feedback .ok { color: var(--jade); font-weight: 600; }
+.quiz-feedback .no { color: var(--red); font-weight: 600; }
+.quiz-foot { display: flex; gap: 8px; margin-top: 12px; }
+.quiz-input { display: flex; gap: 8px; margin-bottom: 10px; }
+.quiz-input input {
+  flex: 1; height: 38px; padding: 0 12px; border-radius: 10px;
+  border: 1px solid var(--line-2); background: rgba(4,12,20,0.6); font-size: 14px; font-family: var(--serif);
+}
+.quiz-input button { padding: 0 16px; border-radius: 10px; border: 1px solid #ffe9bd; background: linear-gradient(180deg, var(--gold-2), var(--gold)); color: #17120a; font-weight: 600; cursor: pointer; font-size: 12.5px; }
+.feihua-key {
+  display: inline-grid; place-items: center; width: 42px; height: 42px; margin: 0 auto 10px;
+  font-family: var(--serif); font-size: 24px; color: #17120a;
+  background: linear-gradient(160deg, var(--gold-2), var(--gold)); border-radius: 10px;
+  box-shadow: 0 0 22px rgba(232,192,122,0.5);
+}
+.feihua-list { max-height: 150px; overflow-y: auto; margin-top: 10px; display: flex; flex-direction: column; gap: 5px; }
+.feihua-list div { font-size: 12.5px; font-family: var(--serif); color: rgba(242,234,216,0.85); padding-left: 12px; border-left: 2px solid rgba(79,209,176,0.45); }
+.feihua-list div span { font-family: var(--ui); font-size: 10.5px; color: rgba(242,234,216,0.45); margin-left: 8px; }
+.timer { font-size: 12px; color: var(--gold); letter-spacing: 0.1em; }
+
+/* ---------- 行迹面板 ---------- */
+.route-panel {
+  position: fixed; left: 16px; top: 88px; bottom: 96px; width: 276px; z-index: 38;
+  display: flex; flex-direction: column; overflow: hidden;
+  transition: bottom .3s ease;
+}
+/* 与左右两栏同理：底部诗词条打开时让出高度。
+   行迹面板是独立类，不受 .panel 那条让位规则覆盖 —— 漏掉它就会「行迹模式下点省份，
+   诗词条压住站点列表」。 */
+body.rb-open .route-panel { bottom: calc(96px + var(--rb-h, 176px)); }
+/* 隐藏统一由文件顶部的 .hidden 工具类负责 */
+.rp-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 12px 14px; border-bottom: 1px solid rgba(255,255,255,0.08);
+  font-size: 12px; letter-spacing: 0.2em; color: var(--gold-2);
+}
+.rp-body { overflow-y: auto; padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; }
+.route-item {
+  border: 1px solid transparent; border-radius: 10px; padding: 9px 11px; cursor: pointer; transition: all .16s;
+}
+.route-item:hover { background: rgba(255,255,255,0.05); border-color: rgba(232,192,122,0.3); }
+.route-item.on { background: rgba(232,192,122,0.15); border-color: rgba(232,192,122,0.6); }
+.route-item .rn { font-family: var(--serif); font-size: 15px; letter-spacing: 0.1em; }
+.route-item .rt { font-size: 11px; color: rgba(242,234,216,0.5); margin-top: 3px; }
+.route-item .rc { font-size: 10.5px; color: var(--jade); margin-top: 3px; }
+.rp-detail { border-top: 1px solid rgba(255,255,255,0.08); padding: 12px 14px; overflow-y: auto; }
+.rp-detail p { font-size: 11.5px; line-height: 1.85; color: rgba(242,234,216,0.6); margin: 0 0 10px; }
+.rp-stop { display: flex; gap: 9px; align-items: flex-start; padding: 5px 0; cursor: pointer; border-radius: 6px; }
+.rp-stop:hover { background: rgba(255,255,255,0.05); }
+.rp-stop .n {
+  width: 18px; height: 18px; border-radius: 50%; flex-shrink: 0; display: grid; place-items: center;
+  font-size: 10px; color: #0d1418; background: var(--gold); font-weight: 700;
+}
+.rp-stop .info { font-size: 11.5px; line-height: 1.5; }
+.rp-stop .info b { font-family: var(--serif); font-size: 13px; font-weight: 500; }
+.rp-stop .info em { font-style: normal; color: rgba(242,234,216,0.45); font-size: 10.5px; margin-left: 6px; }
+.rp-stop .info small { display: block; color: rgba(242,234,216,0.55); }
+
+/* ---------- 悬停提示 / HUD / Toast ---------- */
+.hover-tip {
+  position: fixed; padding: 4px 10px; border-radius: 8px; pointer-events: none; z-index: 50;
+  background: rgba(8, 18, 30, 0.9); border: 1px solid rgba(232,192,122,0.4);
+  font-size: 12px; letter-spacing: 0.08em; color: var(--gold-2);
+}
+/* 隐藏统一由文件顶部的 .hidden 工具类负责 */
+
+.hud {
+  /* right 由 JS 按右栏实际宽度写入（syncPanelToggles）：
+     右栏展开时 HUD 让位到它左侧 —— 否则 HUD 会 100% 落在右栏底下（z 30 < 35），
+     只透过玻璃背景显出一层灰影，看着像脏东西。 */
+  position: fixed; right: var(--hud-right, 18px); bottom: 96px; z-index: 30;
+  font-size: 10.5px; letter-spacing: 0.08em; color: rgba(242,234,216,0.42);
+  text-align: right; line-height: 1.9; pointer-events: none;
+}
+/* 诗词条打开时 HUD 一并上移，避免被它压住右下角 */
+body.rb-open .hud { bottom: calc(96px + var(--rb-h, 176px)); }
+/* 练习卡居中在底部，会整个压住右下角的 HUD（实测重叠 24k px²）；练习时也无需看经纬度 */
+body.quiz-open .hud { display: none; }
+.hud-row { display: flex; gap: 8px; justify-content: flex-end; }
+.hud-row b { color: rgba(232,192,122,0.75); font-weight: 500; min-width: 62px; }
+.hud-note { margin-top: 6px; font-size: 9.5px; color: rgba(242,234,216,0.26); line-height: 1.6; }
+
+.toast {
+  position: fixed; left: 50%; top: 92px; transform: translate(-50%, -14px);
+  background: rgba(8,18,30,0.94); border: 1px solid rgba(232,192,122,0.45);
+  color: var(--gold-2); font-size: 12.5px; letter-spacing: 0.08em;
+  padding: 9px 18px; border-radius: 12px; z-index: 90; opacity: 0; pointer-events: none;
+  transition: all .3s;
+}
+.toast.show { opacity: 1; transform: translate(-50%, 0); }
+
+/* ---------- 加载页 ---------- */
+#loader {
+  position: fixed; inset: 0; z-index: 200; display: grid; place-items: center;
+  background: radial-gradient(ellipse at center, #0a1a2a 0%, #05090f 70%);
+  transition: opacity .7s ease;
+}
+#loader.done { opacity: 0; pointer-events: none; }
+.loader-inner { text-align: center; }
+.loader-seal {
+  width: 82px; height: 82px; margin: 0 auto 22px; border-radius: 16px;
+  display: grid; place-items: center; font-family: var(--serif); font-size: 46px;
+  color: var(--gold-2); border: 1px solid rgba(255,220,170,0.5);
+  background: linear-gradient(150deg, rgba(180,40,40,0.8), rgba(110,18,18,0.8));
+  box-shadow: 0 0 44px rgba(226,112,90,0.4);
+  animation: sealPulse 2.4s ease-in-out infinite;
+}
+@keyframes sealPulse { 0%,100% { box-shadow: 0 0 34px rgba(226,112,90,0.32); } 50% { box-shadow: 0 0 62px rgba(232,192,122,0.55); } }
+.loader-text { font-family: var(--serif); font-size: 17px; letter-spacing: 0.3em; color: var(--gold-2); }
+.loader-bar { width: 220px; height: 3px; margin: 18px auto 10px; background: rgba(255,255,255,0.12); border-radius: 2px; overflow: hidden; }
+/* 进度条由 __bootStage() 真实驱动（而不是无限滑动的假动画）。
+   假动画看着像在加载，实则无法判断是「在动」还是「卡死」；真进度能直接看出卡在哪一步。 */
+.loader-bar i { display: block; height: 100%; width: 8%; background: linear-gradient(90deg, var(--gold), var(--gold-2)); transition: width .45s ease; }
+.loader-sub { font-size: 11px; letter-spacing: 0.16em; color: rgba(242,234,216,0.4); }
+
+/* 加载失败卡片：保证加载页永远有出口，不会无提示地一直转下去 */
+.loader-fail {
+  margin-top: 26px; max-width: 420px; text-align: left;
+  border: 1px solid rgba(226,112,90,0.5); border-radius: 12px;
+  background: rgba(60,20,16,0.5); padding: 14px 16px;
+}
+.loader-fail .lf-title {
+  font-size: 12px; letter-spacing: 0.2em; color: #ffb08a; margin-bottom: 8px;
+}
+.loader-fail .lf-msg {
+  font-size: 12.5px; line-height: 1.7; color: #ffd9cc; word-break: break-all;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.loader-fail .lf-hint {
+  margin-top: 10px; padding-top: 10px; border-top: 1px solid rgba(255,255,255,0.12);
+  font-size: 11.5px; line-height: 1.85; color: rgba(242,234,216,0.7);
+}
+.loader-fail .lf-actions { display: flex; gap: 8px; margin-top: 14px; }
+.loader-fail .lf-actions button {
+  flex: 1; cursor: pointer; font-size: 12px; padding: 8px 0; border-radius: 8px;
+  border: 1px solid rgba(255,255,255,0.2); background: rgba(255,255,255,0.07); color: var(--paper);
+}
+.loader-fail .lf-actions button:hover { border-color: var(--gold); color: var(--gold-2); }
+#loader.failed { transition: none; }
+
+/* ---------- 滚动条 ---------- */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(232,192,122,0.25); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(232,192,122,0.45); }
+
+/* ---------- 响应式 ---------- */
+@media (max-width: 1280px) {
+  .panel.right { width: 356px; }
+  .route-panel { width: 258px; }
+}
+@media (max-width: 1080px) {
+  .panel.left { width: 240px; }
+  .panel.right { width: 320px; }
+  .route-panel { width: 246px; }
+  .hud { display: none; }
+  /* 底栏按钮多，窄屏放不下会横向滚动（.bottombar 本身有 overflow-x: auto）。
+     这里压缩尺寸让更多按钮露出来，并把滚动条显式画出来 ——
+     系统默认隐藏滚动条，用户根本不知道右边还有「看图识诗 / 补全诗句 / 飞花令」。 */
+  .bottombar { gap: 8px; padding: 0 10px; scrollbar-width: thin; }
+  .bottombar button { font-size: 11px; padding: 6px 9px; }
+  .bottombar .group { gap: 4px; }
+  .bottombar::-webkit-scrollbar { height: 4px; }
+  .bottombar::-webkit-scrollbar-track { background: transparent; }
+  .bottombar::-webkit-scrollbar-thumb { background: rgba(232,192,122,0.38); border-radius: 2px; }
+}
+@media (max-width: 860px) {
+  .titles p { display: none; }
+  /* 左栏在小屏默认收起。收起状态统一由 body.hide-left 表达（见 ui.js），
+     不再在这里写 transform —— 否则与 .collapsed 类各说各话，抽屉开关会算错位置。 */
+  /* 右栏、行迹面板、**左栏**都改用 50vw 约束，保证同时出现也留得下间隙。
+     640 宽时「16 + 行迹 280 + 右栏 340 + 16」放不下，两个面板会贴在一起叠 12px；
+     左栏更容易漏 —— 它在 1080 断点被定成 240px，若不在这一档跟着收窄，
+     390 宽下「16 + 左栏 240」与「右栏 175 + 16」直接压在一起 57px 宽
+     （左栏默认收起，只有用户手动把两栏都展开时才看得见，属于藏得比较深的缺陷）。 */
+  .panel.left { width: min(240px, calc(50vw - 20px)); }
+  .panel.right { width: min(320px, calc(50vw - 20px)); }
+  .route-panel { width: min(260px, calc(50vw - 20px)); }
+  .bottombar { gap: 8px; padding: 0 10px; }
+  .bottombar button { font-size: 10.5px; padding: 5px 8px; }
+  .tour-info { display: none; }
+  .region-bar { bottom: 78px; width: calc(100vw - 24px); }
+  .rb-card { flex-basis: 170px; }
+  .modal-body { padding: 16px 16px 18px; }
+}
+
+/* 手机竖屏再窄一档：顶栏原本放不下 —— 实测 480 宽溢出 47px，
+   因为 .brand 与 .modes 都是 flex-shrink: 0，两者相加就超过可用宽度，
+   搜索框缩到最小也救不回来。这里压缩品牌区与导航按钮的尺寸。 */
+@media (max-width: 640px) {
+  .topbar { gap: 8px; padding: 0 10px; left: 10px; right: 10px; }
+  .brand { gap: 8px; }
+  .seal { width: 32px; height: 32px; font-size: 19px; border-radius: 8px; }
+  .titles h1 { font-size: 16px; letter-spacing: 0.1em; }
+  .modes { gap: 2px; padding: 2px; }
+  .modes button { font-size: 11px; padding: 5px 9px; letter-spacing: 0.06em; }
+}
