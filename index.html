@@ -2,7 +2,12 @@
 <html lang="zh-CN" data-page-node-id="qvme5AVtJVmqpfDNCpNLOp">
 <head data-page-node-id="hmuHBG5cJ1S66srywAJebM">
 <meta charset="utf-8" data-page-node-id="e826m5vGGUfIOVHcvEF4dG" />
-<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" data-page-node-id="g0aGA5BRA4RDxC5UZV0D9d" />
+<!-- 不放 maximum-scale=1 / user-scalable=no：那会禁掉浏览器缩放，
+     低视力用户就没法放大界面文字了（WCAG 1.4.4）。
+     地图区域不会受影响 —— OrbitControls 给画布设了 touch-action: none，
+     画布上的双指手势由应用自己处理（缩放/平移），浏览器不会插手；
+     画布之外（顶栏、两侧抽屉）的缩放才是浏览器该管的事。 -->
+<meta name="viewport" content="width=device-width, initial-scale=1" data-page-node-id="g0aGA5BRA4RDxC5UZV0D9d" />
 <title>诗境·山河 — 中国古典诗词三维地图教学系统</title>
 <link rel="stylesheet" href="./css/style.css" data-page-node-id="YvYkue8A6gCKl1VrQdN3LF" />
 
@@ -131,6 +136,12 @@ document.addEventListener('DOMContentLoaded', function () {
 </head>
 <body data-page-node-id="8xWmI5ZzO8VxLDe12UNC7z">
 
+<!-- 跳转链接：左栏有 79 个诗境条目，键盘用户想到底部工具条要按几十次 Tab。
+     它必须是文档里第一个可聚焦元素，平时用 transform 移出视野，
+     只在获得焦点（也就是键盘 Tab 到它）时才滑下来 —— 鼠标用户永远看不见。
+     目标给 tabindex="-1"，让链接能把焦点交过去又不把它塞进 Tab 顺序。 -->
+<a class="skip-link" href="#bottombar">跳到底部工具条</a>
+
 <div id="stage" data-page-node-id="heDJwxAY9zWyZ0SjmmNX13">
   <canvas id="scene" data-page-node-id="VVe2gE0pnPFlPpg7tRLcLJ"></canvas>
   <div id="labelLayer" class="label-layer" data-page-node-id="HSmJF8BH41fFIhRnaD0XDT"></div>
@@ -219,8 +230,9 @@ document.addEventListener('DOMContentLoaded', function () {
      窄屏下两栏变成盖在地图上的抽屉，才需要这层「点空白处收起」的出口。 -->
 <div id="drawerScrim" class="drawer-scrim hidden"></div>
 
-<!-- 底部工具条 -->
-<footer class="bottombar glass" data-page-node-id="rpRegb5DzZOodOgCeW2gsF">
+<!-- 底部工具条。tabindex="-1"：让上面的跳转链接能把焦点交到这儿，
+     又不把它本身塞进 Tab 顺序（工具条里的按钮本来就各自可聚焦）。 -->
+<footer class="bottombar glass" id="bottombar" tabindex="-1" data-page-node-id="rpRegb5DzZOodOgCeW2gsF">
   <div class="group" id="viewGroup" data-page-node-id="7RD45MlGH5uqx6ROOUnTK7">
     <button data-view="reset" title="完整版图（含南海诸岛）" data-page-node-id="StAePaw7R22DKMuC4sDmZ7">全域</button>
     <button data-view="mainland" title="聚焦大陆主体" data-page-node-id="kf2FTDmYCCAzhvDQu9Sziy">主陆</button>

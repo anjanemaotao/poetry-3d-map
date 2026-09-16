@@ -117,10 +117,29 @@ export class UI {
    * Space 必须 stopPropagation：全局快捷键把空格当成「开始/暂停巡游」，
    * 而那个处理器只排除了 INPUT / SELECT，div 上的空格会一路冒泡上去，
    * 变成「按空格选中诗境」的同时顺手把巡游打开了。
+   *
+   * `label` 可选：给元素写一条可访问名。
+   *
+   * 为什么要写，值得说清楚 —— **不是**因为「不写的话文本太长」。
+   * 实测四类列表项的可见文本都不长（.site-row 只有「碣石秦皇岛」5 个字），
+   * 问题在另一侧：**可见文本相对完整信息是「有损」的**，
+   * 那些被排版和图标承担的信息，读屏拿不到。
+   *
+   *   .site-row    可见「碣石秦皇岛」  —— 省份被 `sub.split('·')` 截掉了，只剩城市；
+   *                                      而且「诗境」这个类别是列表标题给的，
+   *                                      读屏聚焦到某一行时不会回头念标题。
+   *                → 名字补成「诗境 碣石，河北·秦皇岛」
+   *   .route-item  可见「李白 仗剑去国，辞亲远游行迹 9 站」—— 几段文字直接相连，
+   *                没有停顿，听上去像「辞亲远游行迹」是一个词。
+   *                → 名字补成「李白，仗剑去国，辞亲远游，行迹 9 站」
+   *
+   * 所以 aria-label 在这里的作用是「补回视觉上由排版/省略承担的信息」，
+   * 不是给长文本做摘要。照后一种理解去写，很容易写出比原文更短、反而丢信息的名字。
    */
-  keyboardActivate(el, handler) {
+  keyboardActivate(el, handler, label) {
     el.tabIndex = 0;
     el.setAttribute('role', 'button');
+    if (label) el.setAttribute('aria-label', label);
     el.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' || e.key === ' ' || e.key === 'Spacebar') {
         e.preventDefault();
@@ -141,7 +160,7 @@ export class UI {
         <span class="rn">${s.name}</span><span class="rs">${s.sub.split('·').slice(-1)[0]}</span>`;
       const activate = () => this.ctx.onSelectSite(s.id, { fly: true });
       row.onclick = activate;
-      this.keyboardActivate(row, activate);
+      this.keyboardActivate(row, activate, `诗境 ${s.name}，${s.sub}`);
       row.onmouseenter = () => this.ctx.onHoverSite(s.id);
       row.onmouseleave = () => this.ctx.onHoverSite(null);
       box.appendChild(row);
@@ -198,7 +217,7 @@ export class UI {
             this.ctx.onSelectSite(r.id, { fly: true, poemId: r.poemId, keyword: k });
           };
           d.onclick = activate;
-          this.keyboardActivate(d, activate);
+          this.keyboardActivate(d, activate, `${kind}《${r.title}》${r.sub ? `，${r.sub}` : ''}`);
           // 焦点在结果项上按 Esc：关框并把焦点交回输入框。
           // 不还回去的话，框一 display:none，焦点就掉到 <body>，下次 Tab 从页面开头重来。
           d.addEventListener('keydown', (e) => {
@@ -883,7 +902,7 @@ export class UI {
         this.ctx.onBuildRoute(r);
       };
       d.onclick = activate;
-      this.keyboardActivate(d, activate);
+      this.keyboardActivate(d, activate, `${r.name}，${r.title}，行迹 ${r.stops.length} 站`);
       box.appendChild(d);
     });
     $('#routeClose').onclick = () => this.exitRouteMode();
@@ -929,7 +948,7 @@ export class UI {
         <span class="info"><b>${site.name}</b><em>${s.year}</em><small>${s.note}</small></span>`;
       const activate = () => this.ctx.onSelectSite(s.site, { fly: true });
       d.onclick = activate;
-      this.keyboardActivate(d, activate);
+      this.keyboardActivate(d, activate, `第 ${i + 1} 站 ${site.name}，${s.year}`);
       box.appendChild(d);
     });
     box.scrollTop = 0;

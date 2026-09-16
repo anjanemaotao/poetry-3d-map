@@ -40,9 +40,15 @@ let pass = 0;
 const failed = [];
 
 for (const suite of SUITES) {
-  // ── 隔离：每套前重新导航，清掉上一套留下的 DOM / 相机 / 模式状态 ──
+  /* ── 隔离：每套前重新导航，清掉上一套留下的 DOM / 相机 / 模式状态 ──
+     顺序要紧：open 会把视口重置回默认值，所以「先开页面、再设视口、再 reload」，
+     让页面按新视口重新初始化。
+     reload 这步不能省：连续 `open` 同一 URL 时约有一半概率停在 about:blank，
+     后面所有断言就会以「点不到元素 / 读不到类名」这种看不懂的方式失败
+     （在 e2e-a11y.mjs 里实测 3 次失败 1 次，补上 reload 后连测 4 次全中）。 */
   ab(['open', TARGET]);
   ab(['set', 'viewport', '1440', '900']);
+  ab(['reload']);
   ab(['wait', '3000']);
 
   let arr;

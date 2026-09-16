@@ -62,6 +62,26 @@ kbd {
 }
 
 /**
+ * 跳转链接。
+ *
+ * 平时用 transform 移到视野外，只在**获得焦点**时滑进来 —— 也就是只有键盘用户
+ * （Tab 到它）才看得见，鼠标用户永远看不到。不要用 `display: none` 或 `visibility: hidden`：
+ * 那会把它从 Tab 顺序里摘掉，链接本身就没人能用了。
+ */
+.skip-link {
+  position: fixed; left: 16px; top: 10px; z-index: 210;
+  transform: translateY(-260%);
+  padding: 9px 18px; border-radius: 10px;
+  background: linear-gradient(180deg, var(--gold-2), var(--gold));
+  color: #17120a; font-size: 12.5px; font-weight: 600; letter-spacing: 0.1em;
+  text-decoration: none; white-space: nowrap;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  transition: transform .18s ease;
+}
+.skip-link:focus { transform: translateY(0); }
+@media (prefers-reduced-motion: reduce) { .skip-link { transition: none; } }
+
+/**
  * 通用隐藏工具类。
  * 必须有 !important：本文件里各组件（.search-results / .route-panel / .quiz-card …）
  * 都定义了各自的 display，若只写 `.hidden { display: none }`，同特异度下后出现的
