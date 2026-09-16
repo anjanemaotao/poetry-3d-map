@@ -102,6 +102,34 @@ export class UI {
     $('#hudEra').textContent = eras.length > 12 ? eras.slice(0, 12) + '…' : eras;
   }
 
+  /**
+   * 让一个非 button 元素能被键盘操作。
+   *
+   * 左栏诗境列表、行迹列表、行迹站点、搜索结果这四处原先都是 div + onclick ——
+   * 鼠标能用，键盘完全够不到：div 不在 Tab 顺序里，也没有「按下回车」这回事。
+   * 这里补三样：tabindex 进 Tab 顺序、role 告诉读屏「这是个可点的东西」、
+   * Enter / Space 触发。
+   *
+   * 没有把它们改成 <button>：这几个类身上挂着大量布局样式（flex 行、margin-left:auto
+   * 把副标题推到右端、多行截断），换成 button 会连带吃到 UA 默认的背景色、居中对齐、
+   * 字号与内边距，回归面比补三个属性大得多，收益却一样。
+   *
+   * Space 必须 stopPropagation：全局快捷键把空格当成「开始/暂停巡游」，
+   * 而那个处理器只排除了 INPUT / SELECT，div 上的空格会一路冒泡上去，
+   * 变成「按空格选中诗境」的同时顺手把巡游打开了。
+   */
+  keyboardActivate(el, handler) {
+    el.tabIndex = 0;
+    el.setAttribute('role', 'button');
+    el.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ' || e.key === 'Spacebar') {
+        e.preventDefault();
+        e.stopPropagation();
+        handler(e);
+      }
+    });
+  }
+
   buildSiteList() {
     const box = $('#siteList');
     box.innerHTML = '';
@@ -111,7 +139,9 @@ export class UI {
       row.dataset.id = s.id;
       row.innerHTML = `<span class="dot" style="background:${ERA_HEX[s.era]}"></span>
         <span class="rn">${s.name}</span><span class="rs">${s.sub.split('·').slice(-1)[0]}</span>`;
-      row.onclick = () => this.ctx.onSelectSite(s.id, { fly: true });
+      const activate = () => this.ctx.onSelectSite(s.id, { fly: true });
+      row.onclick = activate;
+      this.keyboardActivate(row, activate);
       row.onmouseenter = () => this.ctx.onHoverSite(s.id);
       row.onmouseleave = () => this.ctx.onHoverSite(null);
       box.appendChild(row);
@@ -163,10 +193,17 @@ export class UI {
           d.className = 'sr-item';
           const kind = r.kind === 'site' ? '诗境' : r.kind === 'poem' ? '诗篇' : '诗句';
           d.innerHTML = `<span class="sr-k">${kind}</span><span class="sr-t">${r.title}</span><span class="sr-s">${r.sub || ''}</span>`;
-          d.onclick = () => {
+          const activate = () => {
             hide();
             this.ctx.onSelectSite(r.id, { fly: true, poemId: r.poemId, keyword: k });
           };
+          d.onclick = activate;
+          this.keyboardActivate(d, activate);
+          // 焦点在结果项上按 Esc：关框并把焦点交回输入框。
+          // 不还回去的话，框一 display:none，焦点就掉到 <body>，下次 Tab 从页面开头重来。
+          d.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') { e.stopPropagation(); hide(); input.focus(); }
+          });
           box.appendChild(d);
         });
       }
@@ -183,6 +220,19 @@ export class UI {
         const first = box.querySelector('.sr-item');
         if (first) first.onclick();
         else run();
+      }
+      // ↑ / ↓ 在结果项之间移动焦点 —— 结果项现在是可以聚焦的，
+      // 但没有这条的话，从输入框只能一路 Tab 过去，中间会穿过整个顶栏与左栏。
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        const items = $$('#searchResults .sr-item');
+        if (!items.length) return;
+        e.preventDefault();
+        const cur = items.indexOf(document.activeElement);
+        const down = e.key === 'ArrowDown';
+        const next = cur < 0
+          ? (down ? 0 : items.length - 1)
+          : (down ? Math.min(cur + 1, items.length - 1) : Math.max(cur - 1, 0));
+        items[next].focus();
       }
       if (e.key === 'Escape') { hide(); input.blur(); }
     };
@@ -209,33 +259,121 @@ export class UI {
    * 开关按钮放在面板外面（见 index.html），位置由这里按面板实际宽度算出来，
    * 所以任何响应式断点都不用单独写媒体查询。
    * 收起状态用 body 上的 hide-left / hide-right 表达，与面板自身的 .collapsed 同步。
+   *
+   * 窄屏（<= 860）下两栏是覆盖式抽屉且**互斥**，见 setPanelHidden 与 applyNarrowMode。
    */
   bindPanels() {
     this.panels = { left: $('#leftPanel'), right: $('#rightPanel') };
-    const spec = [
-      { key: 'left', btn: $('#toggleLeft'), cls: 'hide-left', closed: '›', open: '‹' },
-      { key: 'right', btn: $('#toggleRight'), cls: 'hide-right', closed: '‹', open: '›' },
-    ];
+    this._narrow = null;
 
-    spec.forEach(({ key, btn, cls, closed, open }) => {
+    [['left', $('#toggleLeft')], ['right', $('#toggleRight')]].forEach(([key, btn]) => {
       btn.onclick = () => {
-        const hidden = document.body.classList.toggle(cls);
-        this.panels[key].classList.toggle('collapsed', hidden);
-        btn.querySelector('.pt-arrow').textContent = hidden ? closed : open;
-        this.syncPanelToggles();
-        this.ctx.onPanelChange();
+        // 无条件「点一下 = 收起」会在脏状态下把「收起」点成「展开」，
+        // 所以先读当前状态再取反。
+        const hidden = !document.body.classList.contains(this.hideClass(key));
+        this.setPanelHidden(key, hidden);
       };
     });
 
-    window.addEventListener('resize', () => this.syncPanelToggles());
+    window.addEventListener('resize', () => {
+      this.applyNarrowMode();
+      this.syncPanelToggles();
+    });
 
-    // 窄屏默认收起左栏，把地图让出来
-    if (window.innerWidth <= 860) {
-      document.body.classList.add('hide-left');
-      this.panels.left.classList.add('collapsed');
-      $('#toggleLeft').querySelector('.pt-arrow').textContent = '›';
-    }
+    this.applyNarrowMode();
     this.syncPanelToggles();
+  }
+
+  hideClass(key) { return key === 'left' ? 'hide-left' : 'hide-right'; }
+
+  isNarrow() { return document.body.classList.contains('narrow'); }
+
+  /** 收起 / 展开某一侧抽屉。
+   *
+   * **这是唯一的入口** —— 开关按钮、自动展开（选中诗境 / 查看地区）、窄屏互斥全走这里。
+   * 曾经 body 上的 hide-x 与面板上的 .collapsed 由三处各写一遍，加一处新逻辑就要
+   * 记得三处都补；现在收敛成一个方法，两边永远同步。
+   */
+  setPanelHidden(key, hidden, opts = {}) {
+    const cls = this.hideClass(key);
+    const panel = this.panels[key];
+    document.body.classList.toggle(cls, hidden);
+    panel.classList.toggle('collapsed', hidden);
+    // 收起的面板靠 visibility 移出 Tab 顺序（见 css），无障碍树也要跟着摘掉，
+    // 否则读屏软件仍会念出屏幕外那一整栏筛选按钮。
+    panel.setAttribute('aria-hidden', hidden ? 'true' : 'false');
+    const btn = key === 'left' ? $('#toggleLeft') : $('#toggleRight');
+    if (btn) {
+      btn.setAttribute('aria-expanded', hidden ? 'false' : 'true');
+      btn.querySelector('.pt-arrow').textContent =
+        (key === 'left') === hidden ? '›' : '‹';
+    }
+
+    /* 窄屏互斥。
+       窄屏下两栏是盖在地图上的抽屉，同时铺两块会互相盖住、谁也看不清，
+       而且这正是「地图只剩 40px」的病根。展开一边就顺手收起另一边 ——
+       用户点这一下的意图很明确（「我要看这个」），再让他自己收另一边是多余的一步。
+       opts.keepOther 用于内部递归，防止两边互相收起形成死循环。 */
+    if (hidden === false && this.isNarrow() && !opts.keepOther) {
+      const other = key === 'left' ? 'right' : 'left';
+      if (!document.body.classList.contains(this.hideClass(other))) {
+        this.setPanelHidden(other, true, { keepOther: true, quiet: true });
+      }
+    }
+
+    if (!opts.quiet) {
+      this.syncPanelToggles();
+      this.syncScrim();
+      this.ctx.onPanelChange();
+    }
+  }
+
+  /** 遮罩只在「窄屏 + 确有抽屉打开」时出现。
+   * 宽屏下两栏是并排的常驻工具、地图仍在中间空白区里，不需要一层遮罩。 */
+  syncScrim() {
+    const el = $('#drawerScrim');
+    if (!el) return;
+    const anyOpen = !document.body.classList.contains('hide-left')
+      || !document.body.classList.contains('hide-right');
+    el.classList.toggle('hidden', !(this.isNarrow() && anyOpen));
+  }
+
+  /** 窄屏 Esc 用：收起当前打开着的抽屉，返回「是否真的收了东西」。
+   * 返回布尔值是为了让 Esc 的分层判断能继续往下走（没收东西就别吞掉这次按键）。 */
+  closeAnyDrawer() {
+    let closed = false;
+    ['right', 'left'].forEach((key) => {
+      if (!document.body.classList.contains(this.hideClass(key))) {
+        this.setPanelHidden(key, true);
+        closed = true;
+      }
+    });
+    return closed;
+  }
+
+  /** 窄屏形态的切换。
+   *
+   * 只在**跨过断点**时动默认值：resize 过程中反复重置会把用户刚打开的抽屉又收回去
+   * （手机浏览器地址栏收起/展开就会触发 resize）。 */
+  applyNarrowMode() {
+    const narrow = window.innerWidth <= 860;
+    if (narrow === this._narrow) return;
+    this._narrow = narrow;
+    document.body.classList.toggle('narrow', narrow);
+    if (narrow) {
+      // 进入窄屏：两栏默认都收起，把整幅地图让出来。
+      // 宽屏下右栏默认展开（显示操作提示）是有意义的，窄屏下它会盖住大半张地图。
+      this.setPanelHidden('left', true, { quiet: true });
+      this.setPanelHidden('right', true, { quiet: true });
+    } else {
+      /* 离开窄屏：恢复宽屏的默认形态（两栏都展开）。
+         不补这一步的话，窄屏下两栏是收起的，把窗口拉宽（或手机横竖屏切换）之后
+         它们**不会自己回来** —— 用户看到的是一张空荡荡的地图加两个不起眼的开关，
+         得自己想到「去点那两个小箭头」才能把界面找回来。 */
+      this.setPanelHidden('left', false, { quiet: true });
+      this.setPanelHidden('right', false, { quiet: true });
+    }
+    this.syncScrim();
   }
 
   /** 把开关贴到面板边缘；面板收起时贴到屏幕边缘 */
@@ -280,14 +418,8 @@ export class UI {
 
   /** 展开某一侧抽屉（选中诗境 / 查看地区时自动调用，避免内容渲染在收起的抽屉里） */
   expandPanel(key) {
-    const cls = key === 'left' ? 'hide-left' : 'hide-right';
-    if (!document.body.classList.contains(cls)) return;
-    document.body.classList.remove(cls);
-    this.panels[key].classList.remove('collapsed');
-    const btn = key === 'left' ? $('#toggleLeft') : $('#toggleRight');
-    btn.querySelector('.pt-arrow').textContent = key === 'left' ? '‹' : '›';
-    this.syncPanelToggles();
-    this.ctx.onPanelChange();
+    if (!document.body.classList.contains(this.hideClass(key))) return;
+    this.setPanelHidden(key, false);
   }
 
   bindModes() {
@@ -303,7 +435,12 @@ export class UI {
         if (mode === 'class') this.toast('选择底部的练习开始上课');
         if (mode !== 'route') this.ctx.onClearRoute();
         this.hideRegionBar();
+        /* 窄屏下行迹面板占着左侧，若右栏抽屉还开着，css 会让行迹面板整块隐去
+           （见 body.narrow:not(.hide-right) .route-panel）。与其让它「一进去就不见了」，
+           不如进模式时先把右栏收起，用户看到的是行迹面板。 */
+        if (isRoute && this.isNarrow()) this.setPanelHidden('right', true, { quiet: true });
         this.syncPanelToggles();
+        this.syncScrim();
       };
     });
   }
@@ -574,6 +711,16 @@ export class UI {
     $('#rbClose').onclick = () => this.hideRegionBar();
     $('#poemModalClose').onclick = () => this.closePoemModal();
     $('#poemModalMask').onclick = () => this.closePoemModal();
+    // 窄屏遮罩：点抽屉以外的任意处收起抽屉。宽屏下遮罩不显示，这条不生效。
+    $('#drawerScrim').onclick = () => {
+      if (!document.body.classList.contains('hide-left')) this.setPanelHidden('left', true);
+      if (!document.body.classList.contains('hide-right')) this.setPanelHidden('right', true);
+    };
+    // Tab 困在弹窗内。监听挂在弹窗上而不是 document 上：焦点在弹窗里时事件会冒泡到这里，
+    // 焦点若已被别的途径带走（比如用户点了地图），这条也不会去抢。
+    $('#poemModal').addEventListener('keydown', (e) => {
+      if (e.key === 'Tab') this.trapFocus($('#poemModal'), e);
+    });
   }
 
   /**
@@ -630,17 +777,54 @@ export class UI {
     head.className = 'd-head';
     head.innerHTML = `
       <div class="d-title">${poem.title}</div>
-      <div class="d-sub">${poem.dynasty} · ${poem.author}${site ? ' · 收录于「' + site.name + '」' : ''}</div>`;
+      <div class="d-sub">${poem.dynasty} · ${poem.author}${site ? ' · 收录于「' + site.name + '」' : ''}`;
     body.appendChild(head);
     body.appendChild(this.buildPoemCard(poem, st, { modal: true, siteName: site ? site.name : '' }));
 
     body.scrollTop = 0;
+    // 记住是谁打开的，关掉时把焦点还回去 —— 否则键盘用户的焦点会掉回 <body>，
+    // 下次按 Tab 又从页面最开头（顶栏品牌区）重新走一遍，等于丢了位置。
+    this._modalReturnFocus = document.activeElement;
     $('#poemModal').classList.remove('hidden');
+    // 焦点必须移进弹窗：不移的话 Tab 仍在背后那张地图的界面里游走，
+    // 键盘用户会以为「弹窗打开了但键盘不管用」。
+    const first = $('#poemModalClose');
+    if (first) first.focus();
   }
 
-  closePoemModal() { $('#poemModal').classList.add('hidden'); }
+  closePoemModal() {
+    const el = $('#poemModal');
+    if (el.classList.contains('hidden')) return;
+    el.classList.add('hidden');
+    const back = this._modalReturnFocus;
+    this._modalReturnFocus = null;
+    // 触发元素可能已经不在了（比如它所在的诗词条被收起），所以先确认还在文档里
+    if (back && document.contains(back) && typeof back.focus === 'function') back.focus();
+  }
 
   isPoemModalOpen() { return !$('#poemModal').classList.contains('hidden'); }
+
+  /**
+   * 把 Tab 困在弹窗内。
+   *
+   * 弹窗是模态的（有遮罩、点遮罩才关），焦点却可以 Tab 到背后的界面去 ——
+   * 那会让键盘用户停在看不见的地方继续操作，甚至误触「退出练习」这类按钮。
+   * 做法是接管 Tab：在最后一个可聚焦元素上按 Tab 回到第一个，反向亦然。
+   */
+  trapFocus(container, e) {
+    const items = [...container.querySelectorAll(
+      'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+    )].filter((el) => el.getClientRects().length > 0);
+    if (!items.length) return;
+    const first = items[0];
+    const last = items[items.length - 1];
+    const active = document.activeElement;
+    if (e.shiftKey && (active === first || !container.contains(active))) {
+      e.preventDefault(); last.focus();
+    } else if (!e.shiftKey && (active === last || !container.contains(active))) {
+      e.preventDefault(); first.focus();
+    }
+  }
 
   /* ================= 标注层 ================= */
   syncLabels(entries) {
@@ -693,11 +877,13 @@ export class UI {
       d.dataset.id = r.id;
       d.innerHTML = `<div class="rn" style="color:${r.color}">${r.name}</div>
         <div class="rt">${r.title}</div><div class="rc">行迹 ${r.stops.length} 站</div>`;
-      d.onclick = () => {
+      const activate = () => {
         $$('#routeList .route-item').forEach((x) => x.classList.toggle('on', x === d));
         this.renderRouteDetail(r);
         this.ctx.onBuildRoute(r);
       };
+      d.onclick = activate;
+      this.keyboardActivate(d, activate);
       box.appendChild(d);
     });
     $('#routeClose').onclick = () => this.exitRouteMode();
@@ -716,6 +902,7 @@ export class UI {
     $$('#routeList .route-item').forEach((x) => x.classList.remove('on'));
     $('#routeDetail').innerHTML = '';
     this.syncPanelToggles();
+    this.syncScrim();
     this.ctx.onClearRoute();
   }
 
@@ -740,7 +927,9 @@ export class UI {
       d.className = 'rp-stop';
       d.innerHTML = `<span class="n" style="background:${r.color}">${i + 1}</span>
         <span class="info"><b>${site.name}</b><em>${s.year}</em><small>${s.note}</small></span>`;
-      d.onclick = () => this.ctx.onSelectSite(s.site, { fly: true });
+      const activate = () => this.ctx.onSelectSite(s.site, { fly: true });
+      d.onclick = activate;
+      this.keyboardActivate(d, activate);
       box.appendChild(d);
     });
     box.scrollTop = 0;
