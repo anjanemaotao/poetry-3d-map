@@ -120,6 +120,78 @@ export const ROUTES = [
       { site: 'kuaiji', year: '1178', note: '东归山阴，终老故园' },
     ],
   },
+  {
+    id: 'liuyuxi', name: '刘禹锡', title: '沉舟侧畔千帆过', color: '#5ec8f0',
+    desc: '参与永贞革新，半年而败，此后二十三年贬谪在外。别人悲秋，他偏说「我言秋日胜春朝」；别人伤怀，他写下「沉舟侧畔千帆过」。',
+    stops: [
+      { site: 'changan', year: '805', note: '参与永贞革新，半年而败' },
+      { site: 'langzhou', year: '805', note: '贬朗州司马，十年不召，作《秋词》' },
+      { site: 'yueyanglou', year: '824', note: '赴和州任，途经洞庭，作《望洞庭》' },
+      { site: 'qinhuai', year: '826', note: '罢和州过金陵，作《乌衣巷》《石头城》' },
+      { site: 'yangzhou', year: '826', note: '与白居易扬州相逢，酬乐天见赠' },
+      { site: 'luoyang', year: '830', note: '晚年居洛阳，与白居易唱和' },
+    ],
+  },
+  {
+    id: 'dumu', name: '杜牧', title: '十年一觉扬州梦', color: '#ffb570',
+    desc: '宰相杜佑之孙，二十六岁进士及第。少年得意，中年却在扬州幕府消磨了十年；晚年在黄州、池州任上，把咏史写得比谁都清醒。',
+    stops: [
+      { site: 'changan', year: '828', note: '进士及第，又登制科，少年得意' },
+      { site: 'huaqinggong', year: '831', note: '过骊山华清宫，长安回望绣成堆' },
+      { site: 'yangzhou', year: '833', note: '入牛僧孺扬州幕府，十年一觉' },
+      { site: 'qinhuai', year: '836', note: '夜泊秦淮，商女不知亡国恨' },
+      { site: 'chibi', year: '842', note: '任黄州刺史，折戟沉沙认前朝' },
+      { site: 'xinghuacun', year: '844', note: '任池州刺史，清明时节雨纷纷' },
+    ],
+  },
+  {
+    id: 'wangchangling', name: '王昌龄', title: '一片冰心在玉壶', color: '#f47c9a',
+    desc: '「七绝圣手」。早年西出边塞写下《出塞》《从军行》，中年任江宁丞在芙蓉楼送别辛渐，晚岁远贬龙标，李白为他写下「我寄愁心与明月」。',
+    stops: [
+      { site: 'yumenguan', year: '725', note: '西北从军，秦时明月汉时关' },
+      { site: 'qinghaihu', year: '728', note: '《从军行》：黄沙百战穿金甲' },
+      { site: 'kuaiji', year: '735', note: '漫游吴越，作《采莲曲》' },
+      { site: 'beigushan', year: '740', note: '任江宁丞，芙蓉楼送辛渐' },
+      { site: 'longbiao', year: '748', note: '左迁龙标，李白遥寄此心明月' },
+    ],
+  },
+  {
+    id: 'cencan', name: '岑参', title: '忽如一夜春风来', color: '#d4e157',
+    desc: '盛唐边塞诗人的代表。两度出塞，在天山北麓的轮台幕府写下最奇丽的边塞雪景——「忽如一夜春风来，千树万树梨花开」。',
+    stops: [
+      { site: 'changan', year: '749', note: '辞京西行，赴安西幕府' },
+      { site: 'yumenguan', year: '750', note: '出玉门关，故园东望路漫漫' },
+      { site: 'luntai', year: '754', note: '轮台送武判官归京，千树万树梨花开' },
+    ],
+  },
+  {
+    id: 'wanganshi', name: '王安石', title: '不畏浮云遮望眼', color: '#6ea8ff',
+    desc: '年少登飞来峰，壮年入汴京主持熙宁变法，晚年罢相退居江宁半山园。一生大起大落，诗却越写越淡。',
+    stops: [
+      { site: 'xihu', year: '1050', note: '登飞来峰，不畏浮云遮望眼' },
+      { site: 'yangzhou', year: '1068', note: '奉诏赴京，泊船瓜洲，明月何时照我还' },
+      { site: 'bianjing', year: '1069', note: '熙宁变法，推行新法' },
+      { site: 'jinling', year: '1076', note: '罢相退居半山园，作《梅花》《书湖阴先生壁》' },
+    ],
+  },
+  {
+    id: 'fanzhongyan', name: '范仲淹', title: '先天下之忧而忧', color: '#ffd166',
+    desc: '在西北边塞写下第一首真正的宋词边塞之作，在洞庭湖畔写下「先天下之忧而忧」。为官、为将、为文，他都站在最前面。',
+    stops: [
+      { site: 'songjiang', year: '1034', note: '知苏州，江上往来人但爱鲈鱼美' },
+      { site: 'yanzhou', year: '1040', note: '经略陕西，塞下秋来风景异' },
+      { site: 'yueyanglou', year: '1046', note: '应滕子京之请，作《岳阳楼记》' },
+    ],
+  },
+  {
+    id: 'liqingzhao', name: '李清照', title: '生当作人杰', color: '#c77dff',
+    desc: '济南的溪亭日暮里走出的少女词人，与赵明诚共治金石的汴京岁月，都在靖康之乱里碎尽。南渡过乌江，她写下「生当作人杰，死亦为鬼雄」。',
+    stops: [
+      { site: 'jinan', year: '1098', note: '少女时代居济南，溪亭日暮沉醉忘归' },
+      { site: 'bianjing', year: '1101', note: '嫁赵明诚，共治金石录' },
+      { site: 'wujiang', year: '1129', note: '南渡过乌江，生当作人杰' },
+    ],
+  },
 ];
 
 // 飞花令候选令字

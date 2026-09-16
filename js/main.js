@@ -677,6 +677,9 @@ const ui = new UI({
   onHoverSite: (id) => { hoveredId = id; effects.setSelected(id || selectedId); },
   onBuildRoute: (route) => {
     const stops = effects.buildRoute(route);
+    // 先建气泡再取景：气泡一建出来 ui 就知道每帧要投影哪些站点，
+    // 取景飞行那 1.7 秒里它们是跟着走的，而不是飞完才「啪」地冒出来。
+    ui.buildRouteBubbles(route, stops || []);
     if (stops && stops.length) {
       // 只看这条行迹上的站点。
       // 不聚焦的话，79 根光柱和行迹线全叠在一起，路线走向完全看不出来 ——
@@ -697,6 +700,7 @@ const ui = new UI({
   onClearRoute: () => {
     state.routeFocus = null;
     effects.clearRoute();
+    ui.clearRouteBubbles();
     applyVisibility();
     // 行迹模式会把底部诗词条收起来；退出后若右栏还在展示某地区介绍，
     // 就把它一并带回来 —— 否则用户会以为「刚才的诗词列表不见了」。
@@ -899,6 +903,39 @@ function updateLabels() {
   ui.syncLabels(entries);
 }
 
+/**
+ * 行迹气泡：把每处行迹地点的三维坐标投影成屏幕坐标，交给 ui 定位。
+ *
+ * 与 updateLabels 分开写，是因为两者要回答的问题不同：标注是「这个点叫什么」，
+ * 气泡是「这位诗人在这里写了什么」。混在一起，标注的避让逻辑（超出 22 个就不再显示）
+ * 会把气泡一起裁掉，而气泡的卡片高度又会把标注全挤走。
+ */
+function updateRouteBubbles() {
+  const targets = ui.bubbleTargets();
+  if (!targets.length) return;
+  // 气泡属于「地图上的文字标注」，跟「地名」开关走同一条规则 ——
+  // 老师想要一张干净的地图时，有一处能关掉它们。
+  if (!state.layers.labels) { ui.updateRouteBubbles([]); return; }
+
+  const w = window.innerWidth, h = window.innerHeight;
+  // 锚点取光柱顶端序号牌再往上一点：正好是气泡该「指」的那个位置
+  const ANCHOR_Y = state.flat ? 0.9 : 2.35;
+  const entries = targets.map((t) => {
+    const b = effects.beacons.get(t.siteId);
+    if (!b || !b.visible) return { x: 0, y: 0, visible: false };
+    tmpV.copy(b.group.position);
+    tmpV.y += ANCHOR_Y;
+    const p = tmpV.clone().project(camera);
+    const onScreen = p.z < 1 && p.x > -1.05 && p.x < 1.05 && p.y > -1.05 && p.y < 1.05;
+    return {
+      x: (p.x * 0.5 + 0.5) * w,
+      y: (-p.y * 0.5 + 0.5) * h,
+      visible: onScreen,
+    };
+  });
+  ui.updateRouteBubbles(entries);
+}
+
 /* ================= 主循环 ================= */
 const clock = new THREE.Clock();
 function animate() {
@@ -914,6 +951,7 @@ function animate() {
   stars.rotation.y += dt * 0.006;
   map.jdGroup.children.forEach((m) => { if (m.material[0]) m.material[0].emissiveIntensity = 0.6 + 0.25 * Math.sin(t * 1.6); });
   updateLabels();
+  updateRouteBubbles();
   composer.render();
 }
 
@@ -928,6 +966,9 @@ window.addEventListener('resize', () => {
   renderer.setSize(w, h);
   composer.setSize(w, h);
   bloom.setSize(w, h);
+  // 气泡在窄屏会收窄，尺寸一变缓存的宽高就过期了 —— 不重量一遍，
+  // 防重叠会按旧尺寸排，出现「看起来没重叠其实压住了」。
+  ui.measureBubbles();
   // 取景距离依赖视口与界面占位，尺寸变了就重新取景
   if (!userAdjusted && !tween && !selectedId) applyView(VIEW[activeView], true);
 });
