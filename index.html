@@ -205,12 +205,19 @@ document.addEventListener('DOMContentLoaded', function () {
 </aside>
 
 <!-- 抽屉展开按钮：独立于面板，用 fixed 定位常驻屏幕边缘，收起后不会跟着面板移出视野 -->
-<button class="panel-toggle" id="toggleLeft" title="收起 / 展开左侧筛选栏" aria-label="收起或展开左侧筛选栏">
+<button class="panel-toggle" id="toggleLeft" title="收起 / 展开左侧筛选栏" aria-label="收起或展开左侧筛选栏"
+        aria-controls="leftPanel" aria-expanded="true">
   <span class="pt-arrow">‹</span><span class="pt-label">筛 选</span>
 </button>
-<button class="panel-toggle" id="toggleRight" title="收起 / 展开右侧详情栏" aria-label="收起或展开右侧详情栏">
+<button class="panel-toggle" id="toggleRight" title="收起 / 展开右侧详情栏" aria-label="收起或展开右侧详情栏"
+        aria-controls="rightPanel" aria-expanded="true">
   <span class="pt-arrow">›</span><span class="pt-label">诗 词 详 情</span>
 </button>
+
+<!-- 窄屏覆盖式抽屉的遮罩：点它收起抽屉。
+     宽屏下两栏是并排的常驻工具，地图仍占着中间的空白区，不需要遮罩；
+     窄屏下两栏变成盖在地图上的抽屉，才需要这层「点空白处收起」的出口。 -->
+<div id="drawerScrim" class="drawer-scrim hidden"></div>
 
 <!-- 底部工具条 -->
 <footer class="bottombar glass" data-page-node-id="rpRegb5DzZOodOgCeW2gsF">

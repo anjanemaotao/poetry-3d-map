@@ -198,9 +198,14 @@ function measureInset() {
   const GAP = 10;
   const lp = box('#leftPanel'), rp = box('#rightPanel');
   const tb = box('.topbar'), bb = box('.bottombar');
+  /* 窄屏下两栏是盖在地图上的抽屉，不占版面 —— 必须按 0 计。
+     若照常按面板宽度留白，取景会把地图挤进「抽屉之外的那条缝」里：
+     390 宽时两栏各 340px，地图会被压成几十像素，比原样还糟。
+     判据用 body.narrow（ui.js 按 860 断点维护），与 css 里的抽屉形态同一个来源。 */
+  const overlay = document.body.classList.contains('narrow');
   const inset = {
-    left: lp ? lp.right + GAP : INSET_FALLBACK.left,
-    right: rp ? W - rp.left + GAP : INSET_FALLBACK.right,
+    left: overlay ? 0 : (lp ? lp.right + GAP : INSET_FALLBACK.left),
+    right: overlay ? 0 : (rp ? W - rp.left + GAP : INSET_FALLBACK.right),
     top: tb ? tb.bottom + GAP : INSET_FALLBACK.top,
     bottom: bb ? H - bb.top + GAP : INSET_FALLBACK.bottom,
   };
@@ -792,6 +797,9 @@ document.addEventListener('keydown', (e) => {
     // 由内向外逐层关闭：一次 Esc 只收掉最上面那一层，避免把用户想保留的内容一起关掉
     if (ui.isPoemModalOpen()) { ui.closePoemModal(); return; }
     if (ui.isRegionBarOpen()) { ui.hideRegionBar(); return; }
+    // 窄屏的抽屉盖在地图上，是「当前这一层」，Esc 先收它。
+    // 宽屏下两栏是并排的常驻工具、不是弹层，Esc 不该把它们收起来。
+    if (ui.isNarrow() && ui.closeAnyDrawer()) return;
     if (!document.getElementById('quizCard').classList.contains('hidden')) { ui.closeQuiz(); return; }
     if (ui.isRouteMode()) { ui.exitRouteMode(); return; }
   }

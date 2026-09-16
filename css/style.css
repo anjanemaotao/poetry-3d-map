@@ -31,10 +31,34 @@ html, body {
   -webkit-font-smoothing: antialiased;
 }
 
-button, input, select { font-family: inherit; color: inherit; outline: none; }
+button, input, select { font-family: inherit; color: inherit; }
 kbd {
   font-family: var(--ui); font-size: 10px; padding: 1px 5px; border-radius: 4px;
   background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.18);
+}
+
+/**
+ * 键盘焦点必须看得见。
+ *
+ * 这里原先写的是 `button, input, select { outline: none; }` —— 一句「统一去掉焦点环」，
+ * 鼠标用户看不出任何区别，键盘用户则完全不知道自己停在哪个控件上：按下 Tab 屏幕
+ * 毫无变化，等于整个界面不可用。这是最容易被忽略、后果又最严重的一条。
+ *
+ * 用 :focus-visible 而不是 :focus：前者只在「键盘等非指针方式」获得焦点时才匹配，
+ * 所以鼠标点击不会凭空多出一圈金框，键盘操作则一路有明确指示。
+ * 注意这条的选择器特异度（0,1,0）高于上面的元素选择器，不会被覆盖。
+ */
+:focus-visible {
+  outline: 2px solid var(--gold-2);
+  outline-offset: 2px;
+}
+/* 玻璃底上再补一圈暗色描边：金框压在浅色文字/浅色玻璃上时边界会糊掉，
+   加一层深色外圈让焦点环在任何底色上都读得出来。 */
+.chips button:focus-visible,
+.bottombar button:focus-visible,
+.panel-toggle:focus-visible,
+.quiz-choices button:focus-visible {
+  box-shadow: 0 0 0 4px rgba(5, 9, 15, 0.55);
 }
 
 /**
@@ -174,12 +198,88 @@ kbd {
 .panel {
   position: fixed; top: 88px; bottom: 96px; z-index: 35;
   display: flex; flex-direction: column; overflow: hidden;
-  transition: transform .32s cubic-bezier(.4,0,.2,1), bottom .3s ease;
+  /* visibility 的过渡延迟 = 收起动画时长：面板先滑出屏幕，滑完再真正隐藏，
+     否则一加 .collapsed 就立刻消失，看不到滑动过程。
+     展开时延迟归零（见下面的 :not(.collapsed) 规则），立刻可见再滑动。 */
+  transition: transform .32s cubic-bezier(.4,0,.2,1), bottom .3s ease,
+              visibility 0s linear .32s;
 }
 .panel.left { left: 16px; width: 272px; }
 .panel.right { right: 16px; width: 404px; }
 .panel.collapsed.left { transform: translateX(-284px); }
 .panel.collapsed.right { transform: translateX(420px); }
+.panel:not(.collapsed) { transition-delay: 0s, 0s, 0s; }
+
+/**
+ * 收起的面板必须真正「不可聚焦」。
+ *
+ * 收起只靠 transform 平移出屏幕 —— 元素还在文档流里、还在 Tab 顺序里。
+ * 后果：键盘用户按 Tab，焦点会跑到屏幕外那些看不见的筛选按钮和诗境条目上，
+ * 一路按下去屏幕毫无反应，看起来像「键盘坏了」。
+ * visibility: hidden 会让整棵子树退出 Tab 顺序与无障碍树，正好对症。
+ * 不能用 display: none —— 那会连滑动动画一起丢掉。
+ */
+.panel.collapsed { visibility: hidden; }
+
+/* ---------- 窄屏：两栏改为互斥的覆盖式抽屉 ---------- */
+/**
+ * 窄屏（body.narrow，由 ui.js 按 innerWidth <= 860 置位）下两栏不再并排，而是盖在地图上。
+ *
+ * 起因：390 宽下两栏同时展开，各占 ~175px，再加左右 16px 边距，地图只剩约 40px 可见 ——
+ * 「看地图」这件事本身没了。并排布局在手机上本来就装不下两个栏，这不是宽度没调好，
+ * 是形态不对。改成覆盖式抽屉后地图始终是整幅的，抽屉盖在上面，点遮罩收起。
+ *
+ * 宽度 min(340px, 100vw - 48px)：够读出诗词正文，又总在另一侧留出 ≥32px 的地图缝隙，
+ * 让用户看得出「后面还有东西」，不至于以为界面就只剩这一块。
+ *
+ * 收起位移用 calc(-100% - 24px) 而不是写死的 -284px —— 窄屏宽度由视口算出，
+ * 写死值会在某些宽度下「收不干净」，露出半截面板。
+ */
+body.narrow .panel.left,
+body.narrow .panel.right {
+  top: 84px; bottom: 82px;
+  width: min(340px, calc(100vw - 48px));
+}
+body.narrow .panel.collapsed.left { transform: translateX(calc(-100% - 24px)); }
+body.narrow .panel.collapsed.right { transform: translateX(calc(100% + 24px)); }
+/* 行迹面板在窄屏下同样加宽：它是左侧唯一的抽屉，宽度没道理比左右两栏还窄 */
+body.narrow .route-panel { width: min(340px, calc(100vw - 48px)); }
+
+/**
+ * 窄屏下的让位必须**重写一遍**，不能指望上面那两条 body.rb-open / body.quiz-open。
+ *
+ * 让位规则是 `body.rb-open .panel`（特异度 0-2-1），而窄屏的形态规则是
+ * `body.narrow .panel.left`（0-3-1）—— 后者特异度更高，会把 `bottom` 一并盖掉，
+ * 于是窄屏下抽屉不再给底部诗词条和练习卡让位。实测 390 宽下重叠 56.5k px²
+ * （诗词条整条被压在抽屉底下），练习卡更严重，96.5k px²。
+ * 这类「新加的规则把旧规则的某一条属性顺手吃掉」在宽屏上完全看不出来。
+ */
+body.narrow.rb-open .panel { bottom: calc(88px + var(--rb-h, 176px)); }
+body.narrow.quiz-open .panel,
+body.narrow.quiz-open .route-panel { bottom: calc(82px + var(--qc-h, 280px) + 12px); }
+
+/**
+ * 窄屏下右栏抽屉打开时，左侧的行迹面板让位。
+ *
+ * 用 visibility 而不是 .hidden：行迹模式的状态记在「#routePanel 有没有 hidden 类」上
+ * （isRouteMode 就是这么判断的），加 .hidden 会被当成「退出了行迹模式」。
+ * visibility: hidden 只影响绘制，状态原封不动，右抽屉一关它自己就回来。
+ */
+body.narrow:not(.hide-right) .route-panel { visibility: hidden; }
+
+/**
+ * 抽屉遮罩。
+ *
+ * z-index 34 —— 压住地图（#stage 是 fixed、z 自动，排在最前），
+ * 但压在顶栏 / 底栏 / 诗词条 / 练习卡之下。理由：抽屉要盖住的是**地图**，
+ * 不是整个界面。顶栏的搜索与模式、底栏的巡游与练习都是常驻操作，
+ * 让它们被一层「点一下就收起抽屉」的遮罩挡住，只会多出一堆「点不动」的困惑。
+ */
+.drawer-scrim {
+  position: fixed; inset: 0; z-index: 34;
+  background: rgba(2, 6, 11, 0.5);
+  backdrop-filter: blur(2px);
+}
 
 /**
  * 底部诗词条打开时，左右两栏让出它的高度。
