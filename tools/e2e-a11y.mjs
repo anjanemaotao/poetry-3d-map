@@ -44,7 +44,13 @@ const rec = (name, pass, extra = '') => R.push({ name, pass: !!pass, extra: Stri
 /** 页面里描述「当前焦点在谁身上」的小工具，每次按完 Tab 都跑一遍 */
 const DESCRIBE = `JSON.stringify((() => {
   const a = document.activeElement;
-  if (!a || a === document.body) return { tag: 'BODY' };
+  /* 焦点绕回文档（Tab 走完一圈）时 activeElement 就是 body。
+     这里仍然要返回完整的字段结构：调用方会对 stops 做 filter 取 cls / text，
+     少一个字段就会读到 undefined 而整段崩掉 —— 窄屏可聚焦元素本来就少，
+     10 次 Tab 之内很可能就绕回来了，所以这不是理论情况。 */
+  if (!a || a === document.body) {
+    return { tag: 'BODY', id: '', cls: '', text: '', inLeft: false, inRight: false, inModal: false, focusVisible: false, outline: 'none' };
+  }
   const c = getComputedStyle(a);
   return {
     tag: a.tagName,
@@ -83,10 +89,24 @@ function tabToFirst(max = 80) {
 
 /** 重新打开页面并等待应用就绪 —— 每段之间都要做，避免上段留下的焦点 / 模式污染下段 */
 function freshPage(w, h) {
-  ab(['open', TARGET]);
-  ab(['set', 'viewport', String(w), String(h)]);
-  ab(['wait', '3200']);
-  resetFocus();
+  /* 两个坑，都是实测踩出来的：
+     1) 「等固定时长」不够。浏览器会话偶尔会停在 about:blank，
+        此时后面所有断言都会以奇怪的方式失败（点不到 #toggleLeft、body 上没有类名），
+        看起来像功能坏了，其实是页面根本没打开 —— 必须先确认应用真的起来了。
+     2) `open` 本身不稳定。连续 open 同一 URL 时约有一半概率停在 about:blank
+        （实测 3 次里失败 1 次）；后面跟一次 `reload` 则连测 4 次全中。
+        所以顺序固定为 open → 设视口 → reload，不要只 open。 */
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    ab(['open', TARGET]);
+    ab(['set', 'viewport', String(w), String(h)]);
+    ab(['reload']);
+    ab(['wait', '3200']);
+    const booted = evalValue(
+      `!!document.querySelector('#searchInput') && document.body.children.length > 0 && location.href.indexOf('127.0.0.1') > 0`,
+    );
+    if (booted === true) { resetFocus(); return; }
+    if (attempt === 2) throw new Error(`页面打不开（已重试 3 次）：${TARGET}`);
+  }
 }
 
 /* ================= 一、宽屏：Tab 顺序与焦点可见 ================= */
@@ -97,7 +117,9 @@ console.log('[1] 宽屏 Tab 顺序与焦点可见');
   const stops = [];
   for (let i = 0; i < 10; i += 1) { pressTab(); stops.push(active()); }
 
-  rec('首个 Tab 落在搜索框', stops[0].id === 'searchInput', `${stops[0].tag}#${stops[0].id}`);
+  // 跳转链接是文档里第一个可聚焦元素，所以搜索框退到第二站
+  rec('首个 Tab 落在跳转链接', stops[0].cls.includes('skip-link'), `${stops[0].tag}.${stops[0].cls || '?'}`);
+  rec('次个 Tab 落在搜索框', stops[1].id === 'searchInput', `${stops[1].tag}#${stops[1].id}`);
 
   /* 顶栏之后应当先进入**侧栏内容**（两栏在宽屏是展开的常驻工具），
      而不是一路跳到屏幕边缘的抽屉开关。若收起的面板没退出 Tab 顺序，
@@ -242,6 +264,50 @@ console.log('[4] 列表项 Enter / 空格');
   ab(['wait', '200']);
   const sr = active();
   rec('搜索框 ↓ 把焦点交给结果项', sr.cls.includes('sr-item'), `${sr.tag}.${sr.cls || '(无类)'}`);
+}
+
+/* ================= 五、跳转链接 ================= */
+console.log('[5] 跳转链接');
+{
+  freshPage(1440, 900);
+
+  const SKIP_Y = `Math.round(document.querySelector('.skip-link').getBoundingClientRect().bottom)`;
+  const beforeY = Number(evalValue(SKIP_Y));
+  rec('未聚焦时跳转链接在视野之外', beforeY <= 0, `bottom=${beforeY}`);
+
+  pressTab();
+  const first = active();
+  rec('首个可聚焦元素是跳转链接', first.cls.includes('skip-link'), `${first.tag}.${first.cls || '?'}`);
+
+  ab(['wait', '350']);   // 滑入动画 .18s
+  const afterY = Number(evalValue(SKIP_Y));
+  rec('聚焦后跳转链接滑入视野', afterY > 0, `bottom=${afterY}`);
+
+  // 真按回车激活：焦点应当交到底部工具条，跳过左栏那 79 个诗境条目
+  ab(['press', 'Enter']);
+  ab(['wait', '350']);
+  const landed = evalValue(
+    `document.activeElement === document.querySelector('#bottombar')`
+    + ` || !!document.activeElement.closest('#bottombar')`,
+  );
+  rec('激活后焦点落到底部工具条', landed === true, String(landed));
+}
+
+/* ================= 六、列表项的可访问名 ================= */
+console.log('[6] 列表项可访问名');
+{
+  freshPage(1440, 900);
+  const names = evalValue(`JSON.stringify({
+    site: (document.querySelector('#siteList .site-row') || {}).getAttribute
+      ? document.querySelector('#siteList .site-row').getAttribute('aria-label') : null,
+  })`);
+  rec('诗境列表项有 aria-label', !!names.site && /诗境/.test(String(names.site)), String(names.site));
+
+  // 行迹列表要先进入行迹模式才渲染
+  evalValue(`document.querySelector('[data-mode="route"]').click()`);
+  ab(['wait', '900']);
+  const routeName = String(evalValue(`(document.querySelector('#routeList .route-item') || {}).getAttribute ? document.querySelector('#routeList .route-item').getAttribute('aria-label') : ''`));
+  rec('行迹列表项有 aria-label', routeName.length > 0 && /行迹 \d+ 站/.test(routeName), routeName);
 }
 
 /* ================= 结果 ================= */
