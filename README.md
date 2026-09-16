@@ -228,6 +228,7 @@ poetry-3d-map/
 ├── tools/e2e-layout.js     布局巡检（页面侧检测器：重叠 / 让位过度 / 宽度不变量 / 溢出 / 窄屏互斥）
 ├── tools/e2e-layout.mjs    布局巡检 runner：八个视口，各跑一遍 e2e-layout.js
 ├── tools/e2e-a11y.mjs      键盘可访问性回归 runner：发真实按键量 Tab 顺序与焦点（22 项）
+├── tools/e2e-bubbles.mjs   行迹气泡卡片回归 runner：16 条行迹逐条量气泡数 / 不重叠 / 不出界 / 有内容
 └── vendor/                 Three.js r160 及 OrbitControls / EffectComposer / UnrealBloomPass
 ```
 
@@ -417,14 +418,16 @@ python3 serve.py &                  # 先起静态服务器
 node tools/e2e-all.mjs              # 功能回归：一个视口（1440×900）跑三套注入脚本
 node tools/e2e-layout.mjs           # 布局巡检：八个视口量重叠 / 溢出 / 元素宽度
 node tools/e2e-a11y.mjs             # 键盘回归：发真实按键量 Tab 顺序与焦点
+node tools/e2e-bubbles.mjs          # 气泡层回归：16 条行迹逐条量气泡数 / 不重叠 / 不出界 / 有内容
 ```
 
-**为什么是三套而不是一套**：它们回答的是三个不同的问题 ——
+**为什么不是一套**：它们回答的是四个不同的问题 ——
 `e2e-all.mjs` 问「功能对不对」，`e2e-layout.mjs` 问「摆得下吗」，
-`e2e-a11y.mjs` 问「键盘能不能用」。
+`e2e-a11y.mjs` 问「键盘能不能用」，`e2e-bubbles.mjs` 问「**站点多 → 塞得下吗**」。
 混在一起跑会得到一个误导性的绿灯：功能全对、布局全错，而报告只写「全部通过」。
 布局类缺陷只在特定宽度才出现，1440 下量什么都是对的；
-键盘类缺陷则只有**发真键**才测得出来（见下）。
+键盘类缺陷则只有**发真键**才测得出来（见下）；
+气泡类缺陷则只有**每条行迹都跑一遍**才测得出来 ——「李白 9 站能撑开」不保证「杜牧 6 站也能」。
 
 `e2e-all.mjs` 会在**每套脚本跑之前重新导航页面**，保证脚本之间零状态污染。这不是洁癖，
 是踩出来的：三套脚本共用同一个浏览器会话，而 `e2e-scene.js` 第 12 段会把 `#viewGroup` 里
