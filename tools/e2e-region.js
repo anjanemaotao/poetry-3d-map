@@ -368,6 +368,74 @@
         rec('行迹聚焦 → 右栏地区介绍同步收窄到可见诗境', rItems === rVis,
           `右栏 ${rItems} / 可见 ${rVis}`);
       }
+
+      /* ================= 6. 行迹气泡卡片 ================= */
+      // 选了诗人后，地图上每个行迹站点挂一个气泡，罗列他在此地所作的诗文。
+      // 等镜头飞行 1.7s 落定再做断言 —— 中途量高度/重叠会拿到中间帧。
+      await sleep(2000);
+      const bs = [...document.querySelectorAll('#bubbleLayer .rb-bubble')];
+      rec('气泡层有内容', bs.length === stops, `${bs.length} 个 / 行迹 ${stops} 站`);
+      const items6 = bs.map((b) => {
+        const r = b.getBoundingClientRect();
+        const dot = b.querySelector('.rb-dot').getBoundingClientRect();
+        const poem = b.querySelector('.rb-poem-line')?.textContent || null;
+        const none = b.querySelector('.rb-none')?.textContent || null;
+        return {
+          shown: getComputedStyle(b).display !== 'none' && r.width > 1,
+          w: Math.round(r.width), h: Math.round(r.height),
+          poem: poem, none: none,
+          dotX: Math.round(dot.x + dot.width / 2), dotY: Math.round(dot.y + dot.height / 2),
+        };
+      });
+      rec('每个气泡都只装本人诗作或显式说明「无」',
+        items6.every((it) => it.poem || it.none), '漏: ' + items6.filter((it) => !it.poem && !it.none).length);
+      // 锚点圆点应在每个气泡水平范围内的某个合理区间里。
+      // 退路：若气泡离锚点很远（被推到屏幕另一侧），引线会横穿半张地图 —— 那也是错。
+      // 简单判定：dotX 离气泡水平中心 ≤ 自身宽度 + 60px 缓冲。
+      const shownItems = items6.filter((it) => it.shown);
+      const shownBoxes = shownItems.map((it) => {
+        const r = bs[items6.indexOf(it)].getBoundingClientRect();
+        return { x: r.x, y: r.y, w: r.width, h: r.height, dotX: it.dotX, dotY: it.dotY };
+      });
+      const misaligned = shownBoxes.filter((b) => Math.abs(b.dotX - (b.x + b.w / 2)) > b.w / 2 + 60);
+      rec('每个气泡的锚点圆点离卡片水平中心不远', misaligned.length === 0,
+        `${misaligned.length} 个偏离: ` + misaligned.map((b) => `(${b.dotX} vs ${Math.round(b.x + b.w / 2)})`).join(' '));
+      // 互不重叠
+      let ov6 = 0;
+      for (let i = 0; i < shownBoxes.length; i++) {
+        for (let j = i + 1; j < shownBoxes.length; j++) {
+          const a = shownBoxes[i], b = shownBoxes[j];
+          const ox = Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x);
+          const oy = Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y);
+          if (ox > 2 && oy > 2) ov6 += 1;
+        }
+      }
+      rec('气泡之间互不重叠', ov6 === 0, `${ov6} 对重叠`);
+
+      // 切换诗人 → 气泡按新诗人的作品刷新（站点名应当与新行迹一致）
+      const items7 = [...document.querySelectorAll('#routeList .route-item')];
+      if (items7.length >= 2) {
+        realClick(items7[1]);
+        await sleep(2400);
+        // 右侧 detail 列出新行迹的所有停站 —— 气泡站点集应当等于它
+        const detailNames = new Set([...document.querySelectorAll('#routeDetail .rp-stop .info b')].map((b) => b.textContent));
+        const bubbleNames = new Set([...document.querySelectorAll('#bubbleLayer .rb-name')].map((e) => e.textContent));
+        let inter = 0; detailNames.forEach((n) => { if (bubbleNames.has(n)) inter += 1; });
+        rec('切到另一位诗人 → 气泡站点集与新行迹一致',
+          inter === detailNames.size && bubbleNames.size === detailNames.size,
+          `交集 ${inter}/${detailNames.size}，气泡 ${bubbleNames.size} 个`);
+      }
+
+      // 关「地名」层 → 气泡隐藏（与地名标注是同一类「地图上的文字」）
+      const labelBtn = document.querySelector('[data-layer="labels"]');
+      const wasOn = labelBtn.classList.contains('on');
+      if (wasOn) realClick(labelBtn);
+      await sleep(400);
+      const allHidden = [...document.querySelectorAll('#bubbleLayer .rb-bubble')]
+        .every((b) => getComputedStyle(b).display === 'none');
+      rec('关闭地名图层 → 气泡跟着隐藏', allHidden);
+      if (wasOn) realClick(labelBtn);   // 还原
+      await sleep(400);
     }
 
     // 行迹模式下点省份 → 诗词条出现，同样不能压住行迹面板（它是独立类，容易漏让位）
@@ -391,8 +459,12 @@
     if ($('#detailBody').dataset.region) {
       rec('退出行迹模式 → 底部诗词条随之恢复', shown('#regionBar'));
     }
+    // 气泡是「选中了某位诗人」才有的东西，一并清掉 —— 否则下一次进行迹模式
+    // 旧气泡会和新的叠加/重叠，看着像脏数据。
+    rec('退出行迹模式 → 气泡已清空',
+      document.querySelectorAll('#bubbleLayer .rb-bubble').length === 0);
 
-    /* ================= 6. 练习卡的布局与让位 ================= */
+    /* ================= 7. 练习卡的布局与让位 ================= */
     /**
      * 这一组守的是两类真实缺陷：
      *

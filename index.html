@@ -148,6 +148,15 @@ document.addEventListener('DOMContentLoaded', function () {
   <div class="vignette" data-page-node-id="AXosc5h03jtPp4qnOJH0bu"></div>
 </div>
 
+<!-- 行迹气泡层：选中某位诗人后，在地图上把「他在这处地方写过什么」挂成一串气泡卡片，
+     每个气泡用一条引线 + 尾巴三角指回自己的行迹地点。
+     放在 #stage 之外而不是塞进 .label-layer：标注是「一个地名一个标签」的短文本，
+     气泡是有标题、有正文、可点击、要防重叠的卡片，两者的定位与避让规则完全不同，
+     混在一个层里会互相干扰（标注的避让会把气泡挤没，气泡又会把标注盖住）。
+     层级 z-index 33：压住地图，但压在抽屉遮罩(34)/侧栏(35)/行迹面板(38)/底栏(40)之下，
+     这样开抽屉、开面板时气泡会自然让开，不会盖住操作区。 -->
+<div id="bubbleLayer" class="bubble-layer" aria-hidden="true"></div>
+
 <!-- 顶部栏 -->
 <header class="topbar glass" data-page-node-id="nVuMCZ8Q8DsrBM2znx3fTN">
   <div class="brand" data-page-node-id="ndXfynMCetdklcB3jwYGwP">

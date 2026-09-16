@@ -21,6 +21,9 @@ export class UI {
     this.quiz = null;
     this.tour = { playing: false, index: 0, total: 0 };
     this.labelEls = new Map();
+    this.bubbleEls = new Map();      // 行迹气泡：气泡键 -> 元素
+    this._bubbleStops = [];          // 与气泡一一对应的行迹站点（顺序固定，供每帧投影）
+    this._bubbleSizes = new Map();   // 气泡键 -> {w,h}，量一次缓存，别每帧读 offsetHeight
   }
 
   /* ================= 初始化 ================= */
@@ -920,6 +923,9 @@ export class UI {
     $$('#modeNav button').forEach((x) => x.classList.toggle('active', x.dataset.mode === 'explore'));
     $$('#routeList .route-item').forEach((x) => x.classList.remove('on'));
     $('#routeDetail').innerHTML = '';
+    // 气泡是「选中了某位诗人」才有的东西，模式一退就没有诗人了，必须一起清掉 ——
+    // 面板、左栏、模式按钮、地图聚焦已经是一件事的四个侧面，气泡是第五个。
+    this.clearRouteBubbles();
     this.syncPanelToggles();
     this.syncScrim();
     this.ctx.onClearRoute();
@@ -935,6 +941,184 @@ export class UI {
    * 要不要重算右栏：正在看诗境详情就别打断，正在看地区介绍就必须跟着更新。
    */
   currentRegion() { return $('#detailBody').dataset.region || null; }
+
+  /* ================= 行迹气泡卡片 =================
+   *
+   * 选中诗人后，地图上每一处行迹地点挂一个气泡，罗列他在此地所作的诗文。
+   * 气泡是**鼠标增强**：同样的内容在右侧行迹面板 + 右栏详情里已经完整存在，
+   * 且那条路是键盘可达的。所以气泡层整体 `aria-hidden`、内部不用可聚焦元素 ——
+   * 否则 16 条行迹 × 每条 5 站 × 每站 3 首诗 ≈ 240 个 Tab 停靠点，
+   * 会把键盘操作从「几十步走完」变成「几百步走不完」，反而更糟。
+   */
+  clearRouteBubbles() {
+    const layer = $('#bubbleLayer');
+    if (layer) layer.innerHTML = '';
+    this.bubbleEls = new Map();
+    this._bubbleStops = [];
+    this._bubbleSizes = new Map();
+  }
+
+  /** 供 main.js 每帧投影用：返回气泡对应的站点（顺序与传进来的 stops 一致） */
+  bubbleTargets() { return this._bubbleStops; }
+
+  /**
+   * @param {object} route ROUTES 里的一条
+   * @param {Array}  stops effects.buildRoute 的返回值：至少带 siteId / year / note
+   */
+  buildRouteBubbles(route, stops) {
+    const layer = $('#bubbleLayer');
+    if (!layer || !stops || !stops.length) { this.clearRouteBubbles(); return; }
+    this.clearRouteBubbles();
+
+    // 气泡只放一行诗：诗境 + 1 首诗。多出来的用「+N」标注。
+    // 想看全部 → 点地名飞到右栏，那里本来就是诗篇全表 + 注释 + 翻译的完整视图。
+    // 把气泡做矮，是为了让它能在地图上「罗列各个点」——9 个气泡各 ~58px 才能塞进
+    // 不到 200px 的行迹屏幕范围；做高 100+px 是装得下，但锚点挤的那一片就全糊了。
+    const seen = new Map();       // 同一站点可能在一条行迹里出现两次（陆游两度居山阴）
+
+    stops.forEach((st, i) => {
+      const site = SITE_MAP.get(st.siteId);
+      if (!site) return;
+      const n = (seen.get(st.siteId) || 0) + 1;
+      seen.set(st.siteId, n);
+      // 键里带出现次数：只按 siteId 做键的话，第二次出现的气泡会覆盖第一次的
+      const key = `${st.siteId}#${n}`;
+
+      const poems = (site.poems || []).filter((p) => p.author === route.name);
+      const el = document.createElement('div');
+      el.className = 'rb-bubble';
+      el.dataset.key = key;
+      const first = poems[0];
+      const more = poems.length > 1 ? `<span class="rb-more">+${poems.length - 1}</span>` : '';
+      el.innerHTML = `
+        <div class="rb-head">
+          <span class="rb-idx" style="background:${route.color}">${i + 1}</span>
+          <span class="rb-name">${site.name}</span>
+          <span class="rb-year">${st.year || ''}</span>
+        </div>
+        ${first
+          ? `<div class="rb-poem-line" title="${first.dynasty} · ${first.author}《${first.title}》">《${first.title}》${more}</div>`
+          : '<div class="rb-none">此行未见存世诗作</div>'}
+        <span class="rb-tail"></span><span class="rb-stem"></span><span class="rb-dot"></span>`;
+
+      const nameEl = el.querySelector('.rb-name');
+      // 点地名飞过去 —— 用的是 div 不是 button：整体 aria-hidden 下放可聚焦元素是错的
+      nameEl.style.cursor = 'pointer';
+      nameEl.onclick = (ev) => { ev.stopPropagation(); this.ctx.onSelectSite(st.siteId, { fly: true }); };
+
+      const lineEl = el.querySelector('.rb-poem-line');
+      if (lineEl && first) {
+        lineEl.onclick = (ev) => { ev.stopPropagation(); this.openPoemModal(first, site); };
+      }
+
+      layer.appendChild(el);
+      this.bubbleEls.set(key, el);
+      this._bubbleStops.push({ key, siteId: st.siteId });
+    });
+
+    this.measureBubbles();
+  }
+
+  /**
+   * 量一遍气泡尺寸并缓存。
+   * 每帧读 offsetHeight 会强制同步布局（9 个气泡 × 60fps），没必要 ——
+   * 尺寸只在「换诗人」和「视口变化（窄屏收窄）」时会变。
+   */
+  measureBubbles() {
+    this._bubbleSizes = new Map();
+    this.bubbleEls.forEach((el, key) => {
+      this._bubbleSizes.set(key, { w: el.offsetWidth, h: el.offsetHeight });
+    });
+  }
+
+  /**
+   * 每帧定位气泡。
+   * @param {Array} entries 与 bubbleTargets() 一一对应的 [{x, y, visible}]
+   */
+  updateRouteBubbles(entries) {
+    const stops = this._bubbleStops;
+    if (!stops.length) return;
+    const W = window.innerWidth, H = window.innerHeight;
+    const M = 10;        // 视口留白
+    const GAP = 22;      // 气泡与锚点的默认间距
+    const PAD = 6;       // 气泡之间要留的缝
+    const STEP = 12;     // 避让时每次挪动的距离
+    const MAX_TRIES = 28; // 每方向最多 14 格 = 168px，再远引线就长得不像话了
+    const TAIL_H = 7;    // 三角高度，与 CSS 的 border-top 一致
+
+    const placed = [];
+    const hit = (r) => placed.some((b) => r.x < b.x2 + PAD && r.x2 > b.x - PAD && r.y < b.y2 + PAD && r.y2 > b.y - PAD);
+
+    const items = [];
+    stops.forEach((st, i) => {
+      const el = this.bubbleEls.get(st.key);
+      if (!el) return;
+      const e = entries[i];
+      if (!e || !e.visible) { el.style.display = 'none'; return; }
+      el.style.display = '';
+      const size = this._bubbleSizes.get(st.key) || { w: 200, h: 60 };
+      items.push({ ...st, el, ax: e.x, ay: e.y, w: size.w, h: size.h });
+    });
+    if (!items.length) return;
+
+    // 从上往下排：先放好的占住它最想要的位置，后放的需要让开
+    items.sort((a, b) => a.ay - b.ay);
+
+    items.forEach((it) => {
+      const bx = Math.max(M, Math.min(it.ax - it.w / 2, W - it.w - M));
+      const minY = M;
+      const maxY = H - M - it.h;
+
+      /* 候选位置：锚点上方从近到远，再锚点下方从近到远。
+         上方空间常被上一站霸占，下方才是出路 —— 但只取视口范围内的位置。
+         顺序保证「离锚点最近」且「不压他人」者优先。 */
+      const tries = [];
+      // 上方
+      for (let k = 0; k <= MAX_TRIES / 2; k += 1) {
+        const y = it.ay - GAP - it.h - k * STEP;
+        if (y < minY) break;
+        tries.push({ by: y, below: false });
+      }
+      // 下方
+      for (let k = 0; k <= MAX_TRIES / 2; k += 1) {
+        const y = it.ay + GAP + k * STEP;
+        if (y > maxY) break;
+        tries.push({ by: y, below: true });
+      }
+
+      let chosen = null;
+      for (const t of tries) {
+        const rect = { x: bx, x2: bx + it.w, y: t.by, y2: t.by + it.h };
+        if (!hit(rect)) { chosen = t; break; }
+      }
+      // 全部候选都被占：老实放最后那个（可能压住前面的，引线让用户还分得清谁是谁）
+      if (!chosen) chosen = tries[0] || { by: Math.max(minY, Math.min(it.ay - GAP - it.h, maxY)), below: false };
+
+      const { by, below: isBelow } = chosen;
+      placed.push({ x: bx, x2: bx + it.w, y: by, y2: by + it.h });
+
+      // ---- 尾巴 / 引线 / 锚点：三者一起才说明「这个气泡说的是这个地点」 ----
+      const tailX = Math.max(14, Math.min(it.ax - bx, it.w - 14));
+      const tipY = isBelow ? -TAIL_H : it.h + TAIL_H;
+      const dotX = it.ax - bx;
+      const dotY = it.ay - by;
+      const dx = dotX - tailX;
+      const dy = dotY - tipY;
+      const len = Math.hypot(dx, dy);
+      const deg = Math.atan2(dy, dx) * 180 / Math.PI - 90;
+
+      it.el.classList.toggle('below', isBelow);
+      it.el.style.left = `${Math.round(bx)}px`;
+      it.el.style.top = `${Math.round(by)}px`;
+      it.el.style.setProperty('--tail-x', `${Math.round(tailX)}px`);
+      it.el.style.setProperty('--dot-x', `${Math.round(dotX)}px`);
+      it.el.style.setProperty('--dot-y', `${Math.round(dotY)}px`);
+      it.el.style.setProperty('--stem-x', `${Math.round(tailX)}px`);
+      it.el.style.setProperty('--stem-y', `${Math.round(tipY)}px`);
+      it.el.style.setProperty('--stem-h', `${Math.round(len)}px`);
+      it.el.style.setProperty('--stem-r', `${deg.toFixed(1)}deg`);
+    });
+  }
 
   renderRouteDetail(r) {
     const box = $('#routeDetail');

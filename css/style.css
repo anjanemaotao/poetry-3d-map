@@ -138,6 +138,116 @@ kbd {
 }
 .map-label.dim { opacity: 0.32; }
 
+/* ---------- 行迹气泡卡片 ----------
+   选中一位诗人后，地图上每一处行迹地点挂一个气泡，罗列他在此地所作的诗文，
+   气泡用「尾巴三角 + 引线 + 锚点圆点」指回地点本身。
+
+   为什么尾巴要拆成三段而不是一个 CSS 三角直接贴在气泡上：
+   气泡一旦为了避免互相压住而被上下推开，它就不再贴着锚点了。一个固定在气泡
+   底边的三角这时会指向空气，看起来像「指错了地方」。所以 ——
+     .rb-tail 三角：跟着气泡走，横向对齐锚点（left 由 JS 写进 --tail-x）
+     .rb-stem 引线：从三角尖端连到锚点，长度 = 实际距离（height 由 JS 写）
+     .rb-dot  圆点：钉在锚点上，引线的另一端
+   三者一起才构成「这个气泡说的是这个地点」这件事。
+*/
+.bubble-layer {
+  position: fixed; inset: 0; z-index: 33;
+  pointer-events: none; overflow: hidden;
+}
+/* 只有卡片本体接收点击，层本身必须穿透 —— 否则整张地图都拖不动了 */
+.bubble-layer .rb-bubble { pointer-events: auto; }
+
+.rb-bubble {
+  position: absolute;
+  width: 184px;
+  /* left/top 由 JS 写（卡片左上角），这里不要写 transform：
+     尾巴和引线都是相对卡片定位的，一旦给卡片加 transform，
+     它们会跟着一起变换，算出来的像素全错。 */
+  padding: 5px 9px 6px;
+  border-radius: 9px;
+  background: linear-gradient(180deg, rgba(13, 26, 41, 0.95), rgba(8, 17, 28, 0.95));
+  border: 1px solid var(--line);
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(7px);
+  cursor: default;
+  animation: rbIn .28s ease both;
+}
+@keyframes rbIn { from { opacity: 0; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .rb-bubble { animation: none; } }
+
+.rb-head { display: flex; align-items: center; gap: 6px; }
+.rb-idx {
+  flex: none; width: 16px; height: 16px; border-radius: 50%;
+  display: grid; place-items: center;
+  font-size: 10px; font-weight: 700; color: #101a24;
+}
+.rb-name {
+  flex: 1; min-width: 0;
+  font-size: 12px; font-weight: 600; color: var(--paper);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.rb-year { flex: none; font-size: 10px; color: var(--paper-dim); letter-spacing: .04em; }
+
+/* 只放一行诗：小注、其它作品都在右栏；气泡做高 9 个就塞不进锚点挤的那一片了。 */
+.rb-poem-line {
+  margin-top: 3px;
+  font-family: var(--serif);
+  font-size: 11.5px; color: var(--paper);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  cursor: pointer;
+}
+.rb-poem-line:hover { color: var(--gold-2); }
+.rb-poem-line .rb-more { color: var(--gold); font-family: var(--ui); font-size: 10px; margin-left: 4px; }
+
+/* 这一站没有该诗人的存世作品：明说，而不是留一片空白让人以为加载失败 */
+.rb-none {
+  margin-top: 3px; font-size: 10px; color: rgba(242, 234, 216, 0.4);
+  font-style: italic;
+}
+
+/* 尾巴三角：贴卡片下边缘，横向由 --tail-x 对齐锚点 */
+.rb-tail {
+  position: absolute; top: 100%; left: var(--tail-x, 50%);
+  width: 0; height: 0; margin-left: -6px;
+  border-left: 6px solid transparent; border-right: 6px solid transparent;
+  border-top: 7px solid rgba(10, 21, 34, 0.95);
+}
+/* 引线：从三角尖端连到锚点圆点。写成「可旋转的 1px 细线」而不是竖直细线 ——
+   气泡为了避让会被上下推开，靠近视口边缘时还会被横向夹回屏幕内，
+   这都会让三角与锚点不再上下对齐；只有按实际夹角旋转，线才真的接得上。
+   长度与角度由 JS 写进 --stem-h / --stem-r。 */
+.rb-stem {
+  position: absolute;
+  left: var(--stem-x, 50%); top: var(--stem-y, 100%);
+  width: 1px; height: var(--stem-h, 0px);
+  transform-origin: 50% 0;
+  transform: translateX(-50%) rotate(var(--stem-r, 0deg));
+  background: linear-gradient(180deg, rgba(232, 192, 122, 0.8), rgba(232, 192, 122, 0.3));
+}
+/* 锚点圆点：钉在行迹地点上 */
+.rb-dot {
+  position: absolute; width: 7px; height: 7px; border-radius: 50%;
+  left: var(--dot-x, 50%); top: var(--dot-y, 100%);
+  margin: -3.5px 0 0 -3.5px;
+  background: var(--gold-2);
+  box-shadow: 0 0 0 3px rgba(232, 192, 122, 0.22), 0 0 10px rgba(255, 230, 176, 0.7);
+}
+
+/* 锚点太靠上时气泡改为挂在下方：三角翻到顶边，引线朝上 */
+.rb-bubble.below .rb-tail {
+  top: auto; bottom: 100%;
+  border-top: none; border-bottom: 7px solid rgba(10, 21, 34, 0.95);
+}
+
+/* 窄屏：气泡必须收窄，否则一两个就把整幅地图盖住了。 */
+@media (max-width: 860px) {
+  .rb-bubble { width: min(156px, calc(50vw - 18px)); padding: 4px 7px 5px; border-radius: 8px; }
+  .rb-name { font-size: 11px; }
+  .rb-poem-line { font-size: 10.5px; }
+  .rb-poem-line .rb-more { font-size: 9px; }
+  .rb-none { font-size: 9px; }
+}
+
 /* ---------- 玻璃面板 ---------- */
 .glass {
   background: var(--glass);
