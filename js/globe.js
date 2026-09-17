@@ -362,6 +362,49 @@ function markerTextureFor(hex) {
   return tex;
 }
 
+/**
+ * 行迹序号牌贴图：深色圆底 + 朝代/行迹色描边 + 白色数字。
+ *
+ * 与版图那份（effects.js numberTexture）是同一套观感，但这里不能复用 ——
+ * globe.js 不依赖 effects.js（地球是独立的一层，见文件头），
+ * 而且球面上的序号牌要更小、描边要更亮，才能在深蓝海洋与雪白高原上都立得住。
+ *
+ * 贴图内的**字号必须顶到圆盘边上**：球面序号牌最终只有 27px 左右（见 buildRoute），
+ * 128px 的贴图缩到 27px 是 4.7 倍降采样，贴图里多留一分白边，屏幕上的数字就少一分。
+ * 早先用 radius 48 / 62px 字，量下来数字笔画只有约 8.6px 高，4x 放大看是一片糊的；
+ * 改成 radius 52 / 74px 字之后约 11.2px，才能在不放大的正常视距下读出来。
+ * 两位数的行迹（10 站以上）用 62px —— 74px 下两个数字会顶破圆盘。
+ *
+ * 圆底的不透明度也要够实（0.94）：序号牌正好压在地标上，地标是**加色混合**的
+ * 白色光晕，圆底留的每一分透明都会把那圈光晕漏上来，数字就被洗淡。
+ * 实测 0.86 时 10 倍放大看，数字只剩一团发白的糊影。
+ */
+const numTexCache = new Map();
+function numberTexture(n, color) {
+  const key = `${n}|${color}`;
+  if (numTexCache.has(key)) return numTexCache.get(key);
+  const s = 128;
+  const cv = document.createElement('canvas');
+  cv.width = cv.height = s;
+  const ctx = cv.getContext('2d');
+  ctx.beginPath();
+  ctx.arc(s / 2, s / 2, 52, 0, Math.PI * 2);
+  ctx.fillStyle = 'rgba(6,14,24,0.94)';
+  ctx.fill();
+  ctx.lineWidth = 7;
+  ctx.strokeStyle = new THREE.Color(color).getStyle();
+  ctx.stroke();
+  ctx.fillStyle = '#fff8e6';
+  ctx.font = `bold ${String(n).length > 1 ? 62 : 74}px "PingFang SC", sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(String(n), s / 2, s / 2 + 2);
+  const tex = new THREE.CanvasTexture(cv);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  numTexCache.set(key, tex);
+  return tex;
+}
+
 /* ================= 主体 ================= */
 export class Globe {
   constructor({ renderer, sites, eraColor }) {
@@ -375,6 +418,21 @@ export class Globe {
     this.markers = [];          // { sprite, site, dir, refDepth }
     this.markerRef = 0;         // 基准机位距球心的距离（非 0 表示补偿已启用），进入地球模式时注入
     this.buildMs = 0;
+    // 行迹（球面大圆航线）：见 buildRoute
+    this.routeGroup = null;
+    this.routeCurve = null;
+    this.routeTube = null;
+    this.routeCasing = null;
+    this.routeDots = [];
+    this.routeBadges = [];
+    this.routeFocus = null;
+    this._tubeComp = 1;
+    /* 全局补偿系数：管线与光点用（它们跨越多个深度，没有单一归属站点）。
+       必须在这里初始化 —— 漏了它，buildRoute 里的 0.0042 * this.markerComp
+       会算出 NaN，TubeGeometry 的顶点全变 NaN，球面上**整条航线一根线都画不出来**，
+       而 state / routeGroup / 序号牌全都正常，只有管线静默消失。 */
+    this.markerComp = 1;
+    this.time = 0;
     this._tmp = new THREE.Vector3();
     this._fwd = new THREE.Vector3();
   }
@@ -522,6 +580,241 @@ export class Globe {
     return m ? m.dir.clone() : null;
   }
 
+  markerOf(siteId) {
+    return this.markers.find((x) => x.site.id === siteId) || null;
+  }
+
+  /**
+   * 全局补偿系数：相机到球心的距离 ÷ 基准距离。
+   *
+   * 地标走逐地标的 refDepth（见 captureRefAt），但**行迹管线与飞线光点不行** ——
+   * 它们是一条跨越多个深度的长线，没有单一归属站点，只能用全局系数。
+   * 规则与 effects.js 的 markerScale 完全一致：让世界尺寸正比于距离，
+   * 屏幕尺寸就恒定 —— 拉近时球变大、航线不变粗。
+   *
+   * 地球模式下 controls.target 恒为球心，所以相机位置的长度就是距离。
+   * 基准未注入（markerRef = 0）时退回 1。
+   */
+  markerScale(camera) {
+    if (!(this.markerRef > 0)) return 1;
+    return Math.min(2.6, Math.max(0.06, camera.position.length() / this.markerRef));
+  }
+
+  /* ================= 行迹（球面大圆航线） =================
+   *
+   * 地球上的行迹**不能**复用版图那套几何。版图是 Albers 投影 × 9.2 倍缩放，
+   * 一个世界单位约一百公里；地球是半径 1 的球，一个世界单位约 6371 公里。
+   * 版图行迹的弧线中点要抬 0.55~3.6 个世界单位 —— 放到地球上就是
+   * 3.6 个地球半径高的巨型管子，那正是「地球模式下路线又粗又飘」的成因。
+   *
+   * 这里按球面几何重画：站点之间走**大圆航线**（slerp），航线中段略微抬起，
+   * 抬起量与两地夹角成正比（跨得越远弧越明显），上限压得很低，贴着地表飞。
+   */
+  buildRoute(route) {
+    this.build();
+    this.clearRoute();
+    const stops = route.stops
+      .map((s) => ({ ...s, siteId: s.site, marker: this.markerOf(s.site) }))
+      .filter((s) => s.marker);
+    if (stops.length < 2) return null;
+
+    const color = new THREE.Color(route.color);
+    const group = new THREE.Group();
+    group.name = 'earth-route';
+
+    /* 建这条航线时用的补偿系数。markerComp 由 update / updateRoute 每帧刷新，
+       但此刻可能还是初始值 1 —— 没关系：updateRoute 发现变化超过 15% 会重建几何，
+       实测取景飞行结束时正好收敛到 1（默认太空视角的距离就是基准距离）。 */
+    const comp = (this.markerComp > 0 ? this.markerComp : 1);
+
+    // 采样整条航线（含端点），端点贴地、中段抬起
+    const pts = [];
+    const liftOf = (a, b) => {
+      const ang = Math.acos(Math.max(-1, Math.min(1, a.dot(b))));
+      return Math.min(0.11, 0.012 + ang * 0.055);
+    };
+    for (let i = 0; i < stops.length; i++) {
+      const a = stops[i].marker.dir;
+      pts.push(this._routePoint(a, 0.004));
+      if (i < stops.length - 1) {
+        const b = stops[i + 1].marker.dir;
+        const lift = liftOf(a, b);
+        const n = Math.max(10, Math.round(Math.acos(Math.max(-1, Math.min(1, a.dot(b)))) / 0.035));
+        for (let k = 1; k < n; k++) {
+          const t = k / n;
+          pts.push(this._routePoint(this._slerp(a, b, t), Math.sin(Math.PI * t) * lift + 0.004));
+        }
+      }
+    }
+    const curve = new THREE.CatmullRomCurve3(pts, false, 'catmullrom', 0.25);
+    this.routeCurve = curve;
+
+    /* 航线画两层：底下一条略粗的**深色描边**，上面才是发光的航线本身。
+     *
+     * 只画发光那层是不够的 —— 全球底图在陆地上是明亮的橄榄绿 / 卡其色，
+     * 加色混合的米金色压上去直接洗成一片白，航线在地形亮的地方几乎看不见
+     * （实测中国大陆上空就是这样）。加一条深色底衬之后，亮地形上也能读出线形，
+     * 深色海洋上则靠上层发光取胜 —— 与地图上「江河」的处理是同一个思路。
+     */
+    const R_TUBE = 0.0062;
+    const casing = new THREE.Mesh(
+      new THREE.TubeGeometry(curve, Math.min(900, pts.length * 3), R_TUBE * 1.8 * comp, 7, false),
+      new THREE.MeshBasicMaterial({
+        color: 0x0a1524, transparent: true, opacity: 0.55, depthWrite: false,
+      }),
+    );
+    casing.renderOrder = 1;
+    group.add(casing);
+    this.routeCasing = casing;
+
+    this.routeTube = new THREE.Mesh(
+      new THREE.TubeGeometry(curve, Math.min(900, pts.length * 3), R_TUBE * comp, 7, false),
+      new THREE.MeshBasicMaterial({
+        color, transparent: true, opacity: 0.95,
+        blending: THREE.AdditiveBlending, depthWrite: false,
+      }),
+    );
+    this.routeTube.renderOrder = 2;
+    this._tubeComp = comp;
+    group.add(this.routeTube);
+
+    // 流动光点：沿航线跑，给「这是一条路」一个方向感
+    for (let i = 0; i < 12; i++) {
+      const d = new THREE.Mesh(
+        new THREE.SphereGeometry(0.011, 8, 6),
+        new THREE.MeshBasicMaterial({
+          color: 0xffffff, transparent: true, opacity: 0.95 - i * 0.06,
+          blending: THREE.AdditiveBlending, depthWrite: false,
+        }),
+      );
+      group.add(d);
+      this.routeDots.push({ mesh: d, offset: i / 12 });
+    }
+
+    /* 序号牌：贴在站点正上方一点点，朝向由 Sprite 自己保证（永远面向相机）。
+       抬升同样按站点所在地表半径算 —— 珠峰一带地表 1.028、海面 1.000，
+       用固定半径会让高原上的序号陷进山里。
+
+       baseScale 的取值：屏幕尺寸 = baseScale × fpx / 基准深度。
+       1440×900 下 fpx = (900/2)/tan(15°) ≈ 1679，默认太空视角下站点基准深度 ≈ 4.33，
+       故 0.070 → 约 27px。地标是 13.9px，序号牌明显大一圈 ——
+       行迹模式下序号牌就是站点标记本身，上面还有一位数字要读，
+       24px 时数字笔画只有约 8.6px，肉眼要凑近才认得出来，故定在 27px。
+
+       renderOrder 必须**显式给大**，不能靠 z 排序：
+       地标、飞线光点、序号牌三者位置几乎重合，透明队列按「投影 z」排序，
+       而序号牌只比地标往外挪了 0.016 —— 站点偏离画面中心时这点径向偏移
+       在视线方向上可能反而是**更远**，于是地标（加色混合，光晕比牌子大一圈）
+       被排在后面画，整块序号牌被洗成一片白（实测长安那一站就是这样，
+       肉眼看就是「序号根本没显示」）。renderOrder 优先于 z，给 4 就定死了层级：
+       底衬(1) → 航线(2) → 序号牌(4)，永远压在最上面。
+       远处被地球挡住的序号牌仍然会被正常遮住 —— 那只靠深度测试，与排序无关。 */
+    this.routeBadges = [];
+    stops.forEach((s, i) => {
+      const r = s.marker.dir.length() || 1;
+      const sprite = new THREE.Sprite(new THREE.SpriteMaterial({
+        map: numberTexture(i + 1, route.color), transparent: true, depthWrite: false,
+      }));
+      sprite.position.copy(s.marker.dir).multiplyScalar(r + 0.016);
+      sprite.userData.siteId = s.siteId;
+      sprite.userData.baseScale = 0.070;
+      sprite.scale.setScalar(0.070 * comp);
+      sprite.renderOrder = 4;
+      group.add(sprite);
+      this.routeBadges.push({ sprite, marker: s.marker, siteId: s.siteId });
+    });
+
+    this.routeGroup = group;
+    this.root.add(group);
+    return stops;
+  }
+
+  /** 球面上按方向 + 半径偏移取点（半径含地形起伏） */
+  _routePoint(dir, lift) {
+    return dir.clone().multiplyScalar(surfaceRadius(...lonLatFromDir(dir)) + lift);
+  }
+
+  /** 球面线性插值（大圆航线） */
+  _slerp(a, b, t) {
+    const dot = Math.max(-1, Math.min(1, a.dot(b)));
+    const w = Math.acos(dot);
+    if (w < 1e-5) return a.clone();
+    const s = Math.sin(w);
+    return a.clone().multiplyScalar(Math.sin((1 - t) * w) / s)
+      .addScaledVector(b, Math.sin(t * w) / s)
+      .normalize();
+  }
+
+  clearRoute() {
+    if (this.routeGroup) {
+      this.root.remove(this.routeGroup);
+      this.routeGroup.traverse((o) => {
+        if (o.geometry) o.geometry.dispose();
+        if (o.material) { if (o.material.map) o.material.map.dispose(); o.material.dispose(); }
+      });
+    }
+    this.routeGroup = null;
+    this.routeCurve = null;
+    this.routeTube = null;
+    this.routeCasing = null;
+    this.routeDots = [];
+    this.routeBadges = [];
+  }
+
+  /**
+   * 行迹聚焦：只显示这条行迹上的站点，其余地标隐去。
+   * 传 null 表示不限制（恢复全部）。
+   *
+   * 版图那边是靠 setBeaconVisible 逐站开关的，地球上必须同样处理 ——
+   * 否则聚焦后版图只剩 9 根光柱、地球上却还亮着 79 个点，两边对不上。
+   */
+  setRouteFocus(set) {
+    this.routeFocus = set || null;
+    for (const m of this.markers) {
+      m.sprite.visible = !this.routeFocus || this.routeFocus.has(m.site.id);
+    }
+  }
+
+  /** 每帧：行迹管线粗细与序号牌尺寸都按深度补偿（与地标同一条规则） */
+  updateRoute(camera) {
+    if (!this.routeGroup || !this.root.visible) return;
+    this.markerComp = this.markerScale(camera);
+    const fwd = this._fwd;
+    camera.getWorldDirection(fwd);
+    const camPos = camera.position;
+    const v = this._tmp;
+
+    for (const b of this.routeBadges) {
+      const depth = v.subVectors(b.sprite.position, camPos).dot(fwd);
+      const comp = (depth > 0.01 && b.marker.refDepth > 0.01)
+        ? Math.min(2.6, Math.max(0.06, depth / b.marker.refDepth))
+        : 1;
+      b.sprite.scale.setScalar(b.sprite.userData.baseScale * comp);
+    }
+
+    if (this.routeCurve) {
+      for (const d of this.routeDots) {
+        const p = (this.time * 0.06 + d.offset) % 1;
+        d.mesh.position.copy(this.routeCurve.getPointAt(p));
+      }
+    }
+
+    // 管线粗细靠重建几何（长度是地理量，用 scale 会把长度一起缩）。
+    // 只在补偿变化超过 15% 时重建，避免缩放过程中每帧换几何。
+    const g = Math.min(2.6, Math.max(0.06, this.markerComp));
+    if (this.routeTube && Math.abs(g / this._tubeComp - 1) > 0.15) {
+      const seg = Math.min(900, this.routeCurve.points.length * 3);
+      this.routeTube.geometry.dispose();
+      this.routeTube.geometry = new THREE.TubeGeometry(this.routeCurve, seg, 0.0062 * g, 7, false);
+      // 深色底衬要跟着一起重建，否则它俩粗细会脱节（底衬是 2 倍径）
+      if (this.routeCasing) {
+        this.routeCasing.geometry.dispose();
+        this.routeCasing.geometry = new THREE.TubeGeometry(this.routeCurve, seg, 0.0062 * 1.8 * g, 7, false);
+      }
+      this._tubeComp = g;
+    }
+  }
+
   setSelected(siteId) {
     this.selectedId = siteId;
   }
@@ -529,6 +822,10 @@ export class Globe {
   /** 每帧：把每个地标的屏幕尺寸锁在它自己的基准上 */
   update(camera) {
     if (!this.built || !this.root.visible) return;
+    this.time += 1 / 60;
+    // 全局系数也要每帧刷新：行迹可能是「已经拉近之后」才建起来的，
+    // 那时 buildRoute 读到的必须是最新的值（否则第一帧的管线粗细会明显偏）。
+    this.markerComp = this.markerScale(camera);
     const fwd = this._fwd;
     camera.getWorldDirection(fwd);
     const camPos = camera.position;
@@ -556,12 +853,20 @@ export class Globe {
    */
   pickables(camera) {
     const c = camera.position;
-    return this.markers
-      .filter((m) => {
-        const p = m.sprite.position;
-        return p.dot(c) > p.lengthSq();
-      })
-      .map((m) => m.sprite);
+    const out = [];
+    for (const m of this.markers) {
+      if (!m.sprite.visible) continue;          // 行迹聚焦时隐去的站点不该还能被点中
+      const p = m.sprite.position;
+      if (p.dot(c) > p.lengthSq()) out.push(m.sprite);
+    }
+    // 行迹序号牌也要可点：它就是行迹模式下的站点标记（版图那边同理，
+    // 序号牌是画在光柱顶端的，点它当然应该选中该站）。
+    for (const b of this.routeBadges) {
+      if (!b.sprite.visible) continue;
+      const p = b.sprite.position;
+      if (p.dot(c) > p.lengthSq()) out.push(b.sprite);
+    }
+    return out;
   }
 
   show(on) {

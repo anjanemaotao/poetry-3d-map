@@ -30,8 +30,9 @@ const state = {
   voice: false,
   layers: { rivers: true, labels: true, clouds: true },
   quizMode: false,
-  flat: false,          // 2D 平面模式
+  flat: false,          // 2D 平面模式（由 setViewMode 维护，与 earth 互斥）
   earth: false,         // 地球模式（太空视角）
+  activeRoute: null,    // 当前选中的行迹（切换视图时要按新视图重建）
   routeFocus: null,     // Set<siteId>：只看某条行迹上的站点，null 表示不限制
 };
 
@@ -359,7 +360,7 @@ function applyView(v, instant = false) {
  */
 let lastView3D = 'reset';
 
-function setFlatMode(on, opts = {}) {
+function applyFlatMode(on, opts = {}) {
   if (state.flat === on) return;
   state.flat = on;
   document.body.classList.toggle('flat-mode', on);
@@ -367,7 +368,8 @@ function setFlatMode(on, opts = {}) {
   if (effects.cloudGroup) effects.cloudGroup.visible = on ? false : state.layers.clouds;
   stars.visible = !on;
   bloom.enabled = !on;
-  effects.setFlatMode(on);
+  effects.setMode(on ? 'flat' : '3d');
+  ui.invalidateDock();
 
   // 2D 下锁定旋转：能平移缩放、不能转到斜视角，才像一张平面地图
   controls.enableRotate = !on;
@@ -377,13 +379,67 @@ function setFlatMode(on, opts = {}) {
     map.provinces.forEach((m) => { m.userData.hovered = false; m.position.y = 0; });
     lastView3D = activeView === 'flat' ? 'reset' : activeView;
   }
-  document.querySelector('[data-view="flat"]').classList.toggle('on', on);
 
   // noView：调用方自己接着会 applyView（比如从 2D 直接点「俯视」），
   // 此时不要在这里多飞一次相机，否则两次补间会互相打架。
   if (!opts.noView) applyView(on ? VIEW.flat : (VIEW[lastView3D] || VIEW.reset));
   if (!opts.quiet) ui.toast(on ? '已切换到 2D 平面地图（锁定旋转）' : '已回到 3D 地势地图');
 }
+
+/* ================= 视图模式：2D 平面 / 3D / 地球 —— 三选一 ================= */
+/**
+ * 三个视图是**互斥**的，不是三个独立开关。
+ *
+ * 早先 2D 与地球各有一个自己的 on/off，进入地球时会顺手退出 2D，
+ * 但反过来「在地球模式下点 2D」不会退出地球 —— 于是两个模式同时成立：
+ * 地球层与版图层都可见、相机极角限制与近裁剪面互相打架，
+ * 画面变成一团谁也说不清的东西。
+ *
+ * 所以把「切换视图」收成**唯一入口**，三个状态在这里一次性算清楚：
+ * 先退出旧的、再进入新的，中间那次退出不取景（noView），
+ * 因为紧接着的进入分支会自己飞一次相机。
+ */
+function setViewMode(mode, opts = {}) {
+  const m = (mode === 'flat' || mode === 'earth') ? mode : '3d';
+  const cur = state.earth ? 'earth' : state.flat ? 'flat' : '3d';
+  if (cur === m) return false;
+  const to3d = m === '3d';
+  const leave = to3d ? opts : { ...opts, noView: true, quiet: true };
+  if (cur === 'earth') applyEarthMode(false, leave);
+  if (cur === 'flat') applyFlatMode(false, leave);
+  if (m === 'flat') applyFlatMode(true, opts);
+  if (m === 'earth') applyEarthMode(true, opts);
+  syncViewButtons();
+  // 行迹在三种视图下的画法完全不同（版图弧线 / 平面线 / 球面大圆航线），
+  // 换视图必须整条重建，否则会把上一个坐标系里的线留在屏幕上 ——
+  // 「地球模式下那几根粗管子」就是这么来的：行迹在地球模式下才被建出来，
+  // 用的却是版图坐标系（一个世界单位 = 半张中国地图），放到半径 1 的球上自然离谱。
+  const stops = rebuildRoute();
+  /* 重建之后还要按新坐标系**重新取景**。
+     退旧进新时那两次 applyView 取的是「默认版图 / 默认太空视角」，
+     带着行迹切过去就会看到缩在一角的版图，行迹几乎看不见 ——
+     2D 下明明框得好好的，切到 3D 却像换了一条路线。
+     noView 时跳过：那是调用方自己接着要 applyView（比如点「俯视」），
+     不该被行迹取景盖掉。 */
+  if (stops && !opts.noView) frameRoute(stops);
+  return true;
+}
+
+/** 底栏「2D 平面 / 地球」两个互斥开关的高亮，只在这一处维护 */
+function syncViewButtons() {
+  const mode = state.earth ? 'earth' : state.flat ? 'flat' : '3d';
+  document.querySelectorAll('#viewGroup button').forEach((b) => {
+    const v = b.dataset.view;
+    if (v !== 'flat' && v !== 'earth') return;
+    const on = v === mode;
+    b.classList.toggle('on', on);
+    b.classList.toggle('active', on);
+    b.setAttribute('aria-pressed', on ? 'true' : 'false');
+  });
+}
+
+/** 兼容旧签名：外部脚本 / 调试钩子仍按 on/off 调用 */
+function setFlatMode(on, opts = {}) { return setViewMode(on ? 'flat' : '3d', opts); }
 
 /* ================= 地球模式 ================= */
 /**
@@ -524,11 +580,11 @@ let earthPrev = null;
 const HUD_NOTE_MAP = '底图依据中国标准地图 Albers 投影绘制<br/>含台湾省、香港特别行政区、澳门特别行政区及南海诸岛';
 const HUD_NOTE_EARTH = '全球地形依据 ETOPO1 高程数据绘制<br/>中国版图依据中国标准地图数据（含台湾省及南海诸岛）';
 
-function setEarthMode(on, opts = {}) {
+function applyEarthMode(on, opts = {}) {
   if (state.earth === on) return;
-  if (on && state.flat) setFlatMode(false, { noView: true, quiet: true });
   state.earth = on;
   document.body.classList.toggle('earth-mode', on);
+  ui.invalidateDock();
 
   if (on) {
     globe.build();
@@ -546,7 +602,6 @@ function setEarthMode(on, opts = {}) {
     if (effects.routeGroup) effects.routeGroup.visible = false;
     if (effects.cloudGroup) effects.cloudGroup.visible = false;
     document.getElementById('labelLayer').style.display = 'none';
-    ui.updateRouteBubbles([]);
 
     // 星空留着 —— 它就是太空背景
     stars.visible = true;
@@ -591,13 +646,15 @@ function setEarthMode(on, opts = {}) {
     if (note) note.innerHTML = HUD_NOTE_MAP;
     if (!opts.noView) applyView(VIEW[(earthPrev && earthPrev.view) || 'reset']);
   }
-  document.querySelector('[data-view="earth"]').classList.toggle('on', on);
   if (!opts.quiet) {
     ui.toast(on
       ? `已进入地球模式 · 拖动可任意方向转动地球，滚轮缩放（${SITES.length} 处诗境集中在中国）`
       : '已回到中国地势图');
   }
 }
+
+/** 兼容旧签名：外部脚本 / 调试钩子仍按 on/off 调用 */
+function setEarthMode(on, opts = {}) { return setViewMode(on ? 'earth' : '3d', opts); }
 
 /* ================= 相机补间 ================= */
 let tween = null;
@@ -636,6 +693,9 @@ function applyVisibility() {
   visibleSites = state.quizMode ? SITES.slice() : SITES.filter(matchSite);
   const vis = new Set(visibleSites.map((s) => s.id));
   SITES.forEach((s) => effects.setBeaconVisible(s.id, vis.has(s.id)));
+  // 地球层是另一套地标（球面上的 79 个精灵），可见性必须一起算 ——
+  // 否则行迹聚焦后版图只剩 9 根光柱、地球上却还亮着 79 个点。
+  if (globe.built) globe.setRouteFocus(state.quizMode ? null : state.routeFocus);
   ui.refreshList(visibleSites.map((s) => s.id));
   rivers.visible = state.layers.rivers;
   if (effects.cloudGroup) effects.cloudGroup.visible = state.layers.clouds;
@@ -707,9 +767,18 @@ function selectSite(id, opts = {}) {
       const b = effects.beacons.get(id);
       if (b) {
         const p = b.group.position.clone();
-        const dir = new THREE.Vector3(0, 0.80, 0.95).normalize();
-        const dist = 11.5;
-        flyCamera(p.clone().add(dir.multiplyScalar(dist)).setY(p.y + dist * 0.62), p.clone().setY(p.y + 0.3), 1.35);
+        // 2D 平面下必须走俯视方向：复用三维的斜视方向会把相机拉离正上方，
+        // 而 2D 锁了旋转，用户再也转不回来 —— 画面卡在一个「既不平面也不立体」
+        // 的角度上，这是 2D 模式最容易被漏掉的一处适配。
+        const dir = state.flat
+          ? VIEW.flat.dir.clone()
+          : new THREE.Vector3(0, 0.80, 0.95).normalize();
+        const dist = state.flat ? 9 : 11.5;
+        flyCamera(
+          p.clone().add(dir.multiplyScalar(dist)).setY(p.y + dist * (state.flat ? 1 : 0.62)),
+          p.clone().setY(p.y + (state.flat ? 0 : 0.3)),
+          1.35,
+        );
       }
     }
   }
@@ -982,6 +1051,81 @@ function nextTourStep() {
   ui.speak(p.lines.flat().join(''));
 }
 
+/* ================= 行迹：三种视图各有一套画法 ================= */
+/**
+ * 按当前视图建行迹，返回 stops（供气泡与聚焦用）。
+ *
+ * 为什么不能一套几何通吃：
+ *   - 版图是 Albers 投影 + 9.2 倍缩放，一个世界单位约等于一百公里；
+ *     地球是半径 1 的球，一个世界单位约等于 6371 公里。同一个「抬升 3.6」的弧线，
+ *     在版图上是优雅的飞线，在球上就是 3.6 个地球半径的巨型管子。
+ *   - 2D 俯视下弧线不产生屏幕位移，只会让线偏离真实走向。
+ * 所以三种视图各画各的，切换时整条重建。
+ */
+function buildRouteInView(route) {
+  if (state.earth) {
+    globe.build();
+    return globe.buildRoute(route);
+  }
+  return effects.buildRoute(route);
+}
+
+/** 视图切换后按新视图把行迹重建一遍（含气泡与聚焦集合），返回 stops 供取景用 */
+function rebuildRoute() {
+  if (!state.activeRoute) return null;
+  effects.clearRoute();
+  globe.clearRoute();
+  const stops = buildRouteInView(state.activeRoute);
+  ui.buildRouteBubbles(state.activeRoute, stops || []);
+  ui.invalidateDock();
+  if (stops && stops.length) {
+    state.routeFocus = new Set(stops.map((s) => s.siteId));
+    applyVisibility();
+  }
+  return stops || null;
+}
+
+/**
+ * 行迹取景：地图与平面共用一套（平面下强制俯视），地球另算。
+ *
+ * 2D 下必须走俯视方向 —— 复用三维的 (0, 0.86, 0.86) 会把相机拉到斜视角，
+ * 而 2D 模式锁了旋转，用户再也转不回来，画面就卡在一个「既不平面也不立体」的
+ * 尴尬角度上。
+ */
+function frameRoute(stops) {
+  if (state.earth) {
+    const dirs = stops.map((s) => globe.dirOf(s.siteId)).filter(Boolean);
+    if (!dirs.length) return;
+    const c = dirs.reduce((a, b) => a.add(b), new THREE.Vector3());
+    if (c.lengthSq() < 1e-9) return;
+    c.normalize();
+    let half = 0;
+    dirs.forEach((d) => { half = Math.max(half, Math.acos(Math.max(-1, Math.min(1, c.dot(d))))); });
+    /* 由视场角反解距离：tan φ = R·sinθ/(d − R·cosθ) ⇒ d = R·cosθ + R·sinθ/tanφ。
+       θ 取「行迹最大半张角 + 一点余量」，φ 取水平/竖直视场里较小的那个，
+       保证整条行迹在横竖两个方向都装得下。 */
+    const th = Math.min(1.45, half + 0.10);
+    const tanV = Math.tan((camera.fov * Math.PI) / 360);
+    const tanH = tanV * camera.aspect;
+    const tan = Math.max(0.05, Math.min(tanV, tanH));
+    const d = Math.min(EARTH_MAX, Math.max(EARTH_MIN, Math.cos(th) + Math.sin(th) / tan)) * 1.04;
+    flyCamera(c.multiplyScalar(d), new THREE.Vector3(0, 0, 0), 1.7);
+    return;
+  }
+
+  const pts = stops.map((s) => {
+    const b = effects.beacons.get(s.siteId);
+    return b ? b.group.position.clone() : null;
+  }).filter(Boolean);
+  if (!pts.length) return;
+  const mid = pts.reduce((a, b) => a.add(b), new THREE.Vector3()).multiplyScalar(1 / pts.length);
+  const box = new THREE.Box3().setFromPoints(pts);
+  const size = box.getSize(new THREE.Vector3());
+  const d = Math.max(11.5, Math.max(size.x, size.z) * 2.0 + 8);
+  const dir = state.flat ? VIEW.flat.dir.clone() : new THREE.Vector3(0, 0.86, 0.86).normalize();
+  flyCamera(mid.clone().add(dir.multiplyScalar(d)), mid, 1.7);
+}
+
 /* ================= UI 上下文 ================= */
 const ui = new UI({
   sites: SITES,
@@ -991,7 +1135,8 @@ const ui = new UI({
   onStep: (d) => stepSite(d),
   onHoverSite: (id) => { hoveredId = id; effects.setSelected(id || selectedId); },
   onBuildRoute: (route) => {
-    const stops = effects.buildRoute(route);
+    state.activeRoute = route;
+    const stops = buildRouteInView(route);
     // 先建气泡再取景：气泡一建出来 ui 就知道每帧要投影哪些站点，
     // 取景飞行那 1.7 秒里它们是跟着走的，而不是飞完才「啪」地冒出来。
     ui.buildRouteBubbles(route, stops || []);
@@ -1001,20 +1146,15 @@ const ui = new UI({
       // 这正是「一片，看不清」的成因。
       state.routeFocus = new Set(stops.map((s) => s.siteId));
       applyVisibility();
-      ui.toast(`${route.name}行迹：${stops.length} 站（地图已只显示这些站点）`);
-
-      const pts = stops.map((s) => s.site.group.position.clone());
-      const mid = pts.reduce((a, b) => a.add(b), new THREE.Vector3()).multiplyScalar(1 / pts.length);
-      const box = new THREE.Box3().setFromPoints(pts);
-      const size = box.getSize(new THREE.Vector3());
-      const d = Math.max(11.5, Math.max(size.x, size.z) * 2.0 + 8);
-      const dir = new THREE.Vector3(0, 0.86, 0.86).normalize();
-      flyCamera(mid.clone().add(dir.multiplyScalar(d)), mid, 1.7);
+      ui.toast(`${route.name}行迹：${stops.length} 站（${state.earth ? '地球' : state.flat ? '平面' : '地图'}已只显示这些站点）`);
+      frameRoute(stops);
     }
   },
   onClearRoute: () => {
     state.routeFocus = null;
+    state.activeRoute = null;
     effects.clearRoute();
+    globe.clearRoute();
     ui.clearRouteBubbles();
     applyVisibility();
     // 行迹模式会把底部诗词条收起来；退出后若右栏还在展示某地区介绍，
@@ -1066,23 +1206,17 @@ function bindBars() {
         ui.toast(controls.autoRotate ? '自动旋转已开启' : '自动旋转已关闭');
         return;
       }
-      if (v === 'earth') {
-        setEarthMode(!state.earth);
-        document.querySelectorAll('#viewGroup button')
-          .forEach((x) => x.classList.toggle('active', x === b && state.earth));
-        return;
-      }
-      if (v === 'flat') {
-        setFlatMode(!state.flat);
-        document.querySelectorAll('#viewGroup button')
-          .forEach((x) => x.classList.toggle('active', x === b && state.flat));
-        return;
-      }
+      // 2D 平面与地球是两个互斥的开关，点的是同一个就退出回 3D。
+      // 二者都走 setViewMode —— 三个视图状态的唯一入口（见其注释）。
+      if (v === 'earth') { setViewMode(state.earth ? '3d' : 'earth'); return; }
+      if (v === 'flat') { setViewMode(state.flat ? '3d' : 'flat'); return; }
       // 点其它视角按钮时自动退出 2D / 地球，但不在这里飞相机（下面会 applyView）
-      if (state.earth) setEarthMode(false, { noView: true, quiet: true });
-      if (state.flat) setFlatMode(false, { noView: true, quiet: true });
+      setViewMode('3d', { noView: true, quiet: true });
       applyView(VIEW[v]);
-      document.querySelectorAll('#viewGroup button').forEach((x) => x.classList.toggle('active', x === b));
+      document.querySelectorAll('#viewGroup button').forEach((x) => {
+        if (x.dataset.view === 'flat' || x.dataset.view === 'earth') return;
+        x.classList.toggle('active', x === b);
+      });
     };
   });
 
@@ -1130,13 +1264,16 @@ document.addEventListener('keydown', (e) => {
     if (ui.isRouteMode()) { ui.exitRouteMode(); return; }
     // 地球模式是「换了一层内容」，把它放在最外层：上面那些弹层 / 抽屉 / 面板
     // 都先关，最后再退出地球模式 —— 否则按一次 Esc 会连着丢掉用户正在看的东西。
-    if (state.earth) { setEarthMode(false); return; }
+    if (state.earth) { setViewMode('3d'); return; }
   }
   if (state.earth) {
     // 地球模式下 r 回到默认太空视角（t 不适用：地球没有「俯视」这个预设）
     if (e.key === 'r' || e.key === 'R') {
       flyCamera(EARTH_DIR.clone().multiplyScalar(earthDistNow), new THREE.Vector3(0, 0, 0), 1.2);
     }
+  } else if (state.flat) {
+    // 2D 下只有俯视这一个预设：r / t 都回俯视
+    if (e.key === 'r' || e.key === 'R' || e.key === 't' || e.key === 'T') applyView(VIEW.flat);
   } else {
     if (e.key === 'r' || e.key === 'R') applyView(VIEW.reset);
     if (e.key === 't' || e.key === 'T') applyView(VIEW.top);
@@ -1205,19 +1342,26 @@ function updateLabels() {
 
   let shown = 0;
   const MAX = 22;
-  // 3D 下标注挂在光柱顶端；2D 下光柱已收起，改为贴在落点圆点上方
+  /* 3D 下标注挂在光柱顶端；2D 下光柱已收起，改为贴在落点圆点旁边。
+     2D 要「圆点 + 旁边一行地名」，所以横向再让开 14px ——
+     地名压在圆点上会把那个点整个盖掉，用户就看不出「地点在哪」了。 */
+  const side = state.flat;
   const LABEL_Y = state.flat ? 0.55 : 1.95;
+  const SIDE_DX = 14;
   list.forEach((x) => {
     tmpV.copy(x.b.group.position);
     tmpV.y += LABEL_Y;
     const p = tmpV.clone().project(camera);
     const onScreen = p.z < 1 && p.x > -1.05 && p.x < 1.05 && p.y > -1.05 && p.y < 1.05;
-    const sx = (p.x * 0.5 + 0.5) * w;
+    const sx = (p.x * 0.5 + 0.5) * w + (side ? SIDE_DX : 0);
     const sy = (-p.y * 0.5 + 0.5) * h;
 
     const isFocus = x.site.id === selectedId || x.site.id === hoveredId;
     const halfW = (x.site.name.length * 13 + 20) / 2;
-    const rect = { x: sx - halfW, x2: sx + halfW, y: sy - 11, y2: sy + 11 };
+    // 2D 下标签的锚点是「左缘中点」（CSS .map-label.side），矩形要按左对齐算
+    const rect = side
+      ? { x: sx, x2: sx + halfW * 2, y: sy - 11, y2: sy + 11 }
+      : { x: sx - halfW, x2: sx + halfW, y: sy - 11, y2: sy + 11 };
 
     let visible = onScreen && x.dist < 130;
     if (visible && !isFocus) {
@@ -1227,7 +1371,7 @@ function updateLabels() {
       placed.push(rect);
     }
     entries.push({
-      site: x.site, x: sx, y: sy, visible,
+      site: x.site, x: sx, y: sy, visible, side,
       selected: x.site.id === selectedId,
       dim: false,
     });
@@ -1250,19 +1394,32 @@ function updateRouteBubbles() {
   if (!state.layers.labels) { ui.updateRouteBubbles([]); return; }
 
   const w = window.innerWidth, h = window.innerHeight;
-  /* 锚点取光柱顶端序号牌再往上一点：正好是气泡该「指」的那个位置。
-     抬升量必须乘上该站点当前的缩放补偿 —— 序号牌的高度是 2.05·comp，
-     而 comp 随缩放变化（行迹取景时约 0.68）。写成固定世界高度的话，
-     光柱缩了、锚点没缩，气泡会整体飘到序号牌上方近 90px 并挤在一起
-     （实测 e2e-region「气泡之间互不重叠」因此报 5 对重叠）。
-     2.36 = 序号牌中心 2.05 + 半高 0.31，是 comp = 1 时的原始值。 */
   const entries = targets.map((t) => {
-    const b = effects.beacons.get(t.siteId);
-    if (!b || !b.visible) return { x: 0, y: 0, visible: false };
-    const comp = b.group.scale.y || 1;
-    tmpV.copy(b.group.position);
-    tmpV.y += (state.flat ? 0.9 : 2.36) * comp;
-    const p = tmpV.clone().project(camera);
+    let v = null;
+    if (state.earth) {
+      /* 地球模式下锚点在球面上，必须另算：
+         1) 用球面可见性判据（P·C > |P|²）排除背面 —— 引线不该指到球后面去；
+         2) 沿法线再抬一点，让引线落在序号牌上而不是穿进球里。 */
+      const m = globe.markerOf(t.siteId);
+      if (!m || !m.sprite.visible) return { x: 0, y: 0, visible: false };
+      const p = m.sprite.position;
+      if (p.dot(camera.position) <= p.lengthSq()) return { x: 0, y: 0, visible: false };
+      v = p.clone().multiplyScalar(1.015);
+    } else {
+      const b = effects.beacons.get(t.siteId);
+      if (!b || !b.visible) return { x: 0, y: 0, visible: false };
+      /* 锚点取光柱顶端序号牌再往上一点：正好是气泡该「指」的那个位置。
+         抬升量必须乘上该站点当前的缩放补偿 —— 序号牌的高度是 2.05·comp，
+         而 comp 随缩放变化（行迹取景时约 0.68）。写成固定世界高度的话，
+         光柱缩了、锚点没缩，气泡会整体飘到序号牌上方近 90px 并挤在一起
+         （实测 e2e-region「气泡之间互不重叠」因此报 5 对重叠）。
+         2.36 = 序号牌中心 2.05 + 半高 0.31，是 comp = 1 时的原始值。
+         2D 下序号牌就贴在圆点上（FLAT_BADGE_LIFT = 0.12），锚点自然也要落到圆点处。 */
+      const comp = b.group.scale.y || 1;
+      v = b.group.position.clone();
+      v.y += (state.flat ? 0.30 : 2.36) * comp;
+    }
+    const p = v.project(camera);
     const onScreen = p.z < 1 && p.x > -1.05 && p.x < 1.05 && p.y > -1.05 && p.y < 1.05;
     return {
       x: (p.x * 0.5 + 0.5) * w,
@@ -1287,6 +1444,10 @@ function animate() {
   if (state.earth) {
     updateEarthLights();
     globe.update(camera);
+    globe.updateRoute(camera);
+    // 行迹卡片在地球模式下也要跟着走：卡片是停靠在左右两侧的，
+    // 不会盖住球面，所以没有理由把它关掉 —— 关了反而会让用户以为「地球上没有诗」。
+    updateRouteBubbles();
   } else {
     updateProvinces(dt);
     effects.update(dt, camera, camera.position.distanceTo(controls.target));
@@ -1350,6 +1511,7 @@ function boot() {
     pickBeacon, pickBeaconByScreen, selectSite, focusProvince, setFlatMode,
     applyView, VIEW, raycaster, pointer,
     globe, setEarthMode, pickGlobe, lonLatFromDir,
+    setViewMode, syncViewButtons, rebuildRoute, frameRoute, buildRouteInView,
   };
 
   setTimeout(() => {

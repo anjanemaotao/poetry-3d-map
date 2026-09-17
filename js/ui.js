@@ -25,6 +25,7 @@ export class UI {
     this._bubbleStops = [];          // 与气泡一一对应的行迹站点（顺序固定，供每帧投影）
     this._bubbleSizes = new Map();   // 气泡键 -> {w,h}，量一次缓存，别每帧读 offsetHeight
     this.bubbleVisible = true;       // 「气泡」开关状态：行迹面板里的按钮控制
+    this._dock = null;               // 气泡停靠区缓存，见 invalidateDock / dockRect
   }
 
   /* ================= 初始化 ================= */
@@ -417,6 +418,8 @@ export class UI {
     // 行迹模式下左栏被整体隐藏（display:none），开关也要跟着藏
     const lGone = this.panels.left.style.display === 'none';
     lb.style.display = lGone ? 'none' : '';
+    // 开关位置变了 → 气泡停靠带跟着变
+    this.invalidateDock();
   }
 
   /**
@@ -868,6 +871,9 @@ export class UI {
       el.style.display = '';
       el.style.left = `${e.x}px`;
       el.style.top = `${e.y}px`;
+      // 2D 平面下标签的锚点是左缘中点（贴在落点圆点右侧），不是中心 ——
+      // 见 CSS .map-label.side
+      el.classList.toggle('side', !!e.side);
       el.classList.toggle('selected', !!e.selected);
       el.classList.toggle('dim', !!e.dim);
     });
@@ -1056,31 +1062,79 @@ export class UI {
     this.bubbleEls.forEach((el, key) => {
       this._bubbleSizes.set(key, { w: el.offsetWidth, h: el.offsetHeight });
     });
+    // 视口一变，面板位置与宽度都可能变 —— 停靠带必须跟着重量
+    this.invalidateDock();
   }
 
   /**
-   * 每帧定位气泡。
+   * 气泡停靠区（地图左右两侧的空白带）失效。
+   * 面板开合、视口变化、视图切换都会改这个区域，任何一处变了就置空重算。
+   */
+  invalidateDock() { this._dock = null; }
+
+  /**
+   * 计算气泡可以停靠的两条竖向「空白带」。
+   *
+   * 为什么要单独算：气泡原先是在锚点上下找空位贴在地图上的，
+   * 结果一片卡片压在地图中央，把地形和路线全盖住了 ——
+   * 而屏幕左右两侧本来就有两条没人用的竖带（面板与地图之间）。
+   *
+   * 边界要**实测**而不是写死：
+   *   - 行迹模式下左侧是 #routePanel（276px），探索模式下是 #leftPanel（272px），
+   *     两者位置相同但宽度不同；
+   *   - 两栏都能被收起到屏幕外，收起后那条带子就该让出来；
+   *   - 抽屉开关按钮贴在面板外缘，也要一起让开。
+   * 缓存起来是因为它每帧都要用，而 getBoundingClientRect 会强制同步布局。
+   */
+  dockRect() {
+    if (this._dock) return this._dock;
+    const W = window.innerWidth;
+    const H = window.innerHeight;
+    const GAP = 10;
+    const visible = (el) => {
+      if (!el) return null;
+      const s = getComputedStyle(el);
+      if (s.display === 'none' || s.visibility === 'hidden') return null;
+      const r = el.getBoundingClientRect();
+      return r.width > 0 && r.height > 0 ? r : null;
+    };
+    // 左侧：取「还在屏幕内」的最靠右的那条边
+    let left = GAP;
+    [$('#routePanel'), $('#leftPanel'), $('#toggleLeft')].forEach((el) => {
+      const r = visible(el);
+      if (r && r.right > GAP + 8) left = Math.max(left, r.right + GAP);
+    });
+    // 右侧：取「还在屏幕内」的最靠左的那条边
+    let right = W - GAP;
+    [$('#rightPanel'), $('#toggleRight')].forEach((el) => {
+      const r = visible(el);
+      if (r && r.left < W - GAP - 8) right = Math.min(right, r.left - GAP);
+    });
+    this._dock = {
+      left: Math.round(left),
+      right: Math.round(right),
+      top: 96,                       // 顶栏 88 + 一点余量
+      bottom: H - 100,               // 底栏 82 + 一点余量
+    };
+    return this._dock;
+  }
+
+  /**
+   * 每帧定位气泡：**停靠在左右两条空白带里**，不再压在地图上方。
+   *
+   * 分工规则：
+   *   - 按锚点横坐标排序后对半分组：靠左的锚点用左栏，靠右的用右栏。
+   *     这样引线基本不交叉，也不会出现「左栏的卡片指着最右边的点、一条线横穿全图」。
+   *   - 栏内按锚点纵坐标自上而下排开，与地图上的高低顺序一致。
+   *   - 空间不够时压缩间距（而不是重叠）—— 卡片高度是内容决定的，压不得。
+   *   - 窄屏（两栏是覆盖式抽屉、中间没有真正的空白带）只保留右栏一列。
+   *
    * @param {Array} entries 与 bubbleTargets() 一一对应的 [{x, y, visible}]
    */
   updateRouteBubbles(entries) {
     const stops = this._bubbleStops;
     if (!stops.length) return;
-    const W = window.innerWidth, H = window.innerHeight;
-    const M = 10;        // 视口留白
-    const GAP = 22;      // 气泡与锚点的默认间距
-    const PAD = 6;       // 气泡之间要留的缝
-    const STEP = 12;     // 避让时每次挪动的距离
-    /* 每方向最多搜 40 格 = 480px。原先 14 格（168px）不够用：
-       气泡宽 184px，而一条行迹的锚点 x 往往只跨三百来像素，同一 y 层最多并排 2 个，
-       于是 9 个气泡要 5 个 y 层；而 ±168px 在视口里只提供约 4 层。槽位一耗尽就落到
-       兜底分支（「老实放最后那个，可能压住前面的」）—— 李白 9 站实测因此有 2 对重叠。
-       搜索范围放宽到 480px 后可用层数翻倍。不必担心引线过长：候选位由近到远排，
-       只有近处真被占满时才会用到远处的槽位。 */
-    const MAX_TRIES = 80;
-    const TAIL_H = 7;    // 三角高度，与 CSS 的 border-top 一致
-
-    const placed = [];
-    const hit = (r) => placed.some((b) => r.x < b.x2 + PAD && r.x2 > b.x - PAD && r.y < b.y2 + PAD && r.y2 > b.y - PAD);
+    const dock = this.dockRect();
 
     const items = [];
     stops.forEach((st, i) => {
@@ -1089,67 +1143,93 @@ export class UI {
       const e = entries[i];
       if (!e || !e.visible) { el.style.display = 'none'; return; }
       el.style.display = '';
-      const size = this._bubbleSizes.get(st.key) || { w: 200, h: 60 };
+      const size = this._bubbleSizes.get(st.key) || { w: 184, h: 58 };
       items.push({ ...st, el, ax: e.x, ay: e.y, w: size.w, h: size.h });
     });
     if (!items.length) return;
 
-    // 从上往下排：先放好的占住它最想要的位置，后放的需要让开
-    items.sort((a, b) => a.ay - b.ay);
+    const colW = items[0].w;
+    // 两列 + 中间至少留 160px 地图，否则不如只用一列
+    const twoCol = (dock.right - dock.left) >= colW * 2 + 160;
 
-    items.forEach((it) => {
-      const bx = Math.max(M, Math.min(it.ax - it.w / 2, W - it.w - M));
-      const minY = M;
-      const maxY = H - M - it.h;
+    const byX = [...items].sort((a, b) => a.ax - b.ax);
+    const groups = [];
+    if (twoCol) {
+      const mid = Math.ceil(byX.length / 2);
+      groups.push({ side: 'left', list: byX.slice(0, mid) });
+      groups.push({ side: 'right', list: byX.slice(mid) });
+    } else {
+      groups.push({ side: 'right', list: byX });
+    }
 
-      /* 候选位置：锚点上方从近到远，再锚点下方从近到远。
-         上方空间常被上一站霸占，下方才是出路 —— 但只取视口范围内的位置。
-         顺序保证「离锚点最近」且「不压他人」者优先。 */
-      const tries = [];
-      // 上方
-      for (let k = 0; k <= MAX_TRIES / 2; k += 1) {
-        const y = it.ay - GAP - it.h - k * STEP;
-        if (y < minY) break;
-        tries.push({ by: y, below: false });
+    const place = (it, x, y, side) => {
+      const el = it.el;
+      const w = it.w;
+      const h = it.h;
+      const dotX = it.ax - x;
+      const dotY = it.ay - y;
+
+      /* 引线从卡片**哪条边**出发指向锚点 —— 就是锚点相对卡片的那一侧。
+       *
+       * 注意别把「边」和「卡片在哪一栏」搞混：类名 side-left / side-right 说的是
+       * **卡片自己在左边还是右边**（尾巴因而挂在朝内那条边上）。
+       * 实测把两者当成一件事，会出现「左栏卡片的尾巴挂到左边缘、朝屏幕外指」——
+       * 地图上九条引线有七条方向反了。
+       *
+       * 横向能解决就用横向。但如果锚点横向正好落在卡片自己的宽度范围里，
+       * 横向引线就会横穿卡片本身（屏幕上是一条金色细线压在卡片上，很脏）——
+       * 实测 9 站里会出现 2 个（扬州 / 敬亭山·桃花潭：行迹取景后华东那几个站点
+       * 正好投影到右侧停靠带里）。这种情况改用纵向，长度通常只有一两百像素。
+       */
+      const edge = dotX > w ? 'right'
+        : dotX < 0 ? 'left'
+          : (dotY < h / 2 ? 'top' : 'bottom');
+
+      el.classList.toggle('side-left', edge === 'right');    // 卡片在左，尖角朝右
+      el.classList.toggle('side-right', edge === 'left');    // 卡片在右，尖角朝左
+      el.classList.toggle('side-top', edge === 'top');
+      el.classList.toggle('side-bottom', edge === 'bottom');
+      el.style.left = `${Math.round(x)}px`;
+      el.style.top = `${Math.round(y)}px`;
+
+      /* 引线起点 + 尾巴三角的位置：
+         横向出线时固定在「朝内那条边」的中点（--tail-y / --stem-y = h/2）——
+         同列卡片的尾巴因此落在同一条竖线上，看起来是一排整齐的引线；
+         纵向出线时才需要把起点横向夹进卡片内，否则起点会跑到卡片外。 */
+      let stemX, stemY;
+      if (edge === 'left' || edge === 'right') {
+        stemX = edge === 'right' ? w : 0;
+        stemY = Math.round(h / 2);
+      } else {
+        stemX = Math.max(8, Math.min(w - 8, Math.round(dotX)));
+        stemY = edge === 'top' ? 0 : h;
       }
-      // 下方
-      for (let k = 0; k <= MAX_TRIES / 2; k += 1) {
-        const y = it.ay + GAP + k * STEP;
-        if (y > maxY) break;
-        tries.push({ by: y, below: true });
-      }
+      const len = Math.hypot(dotX - stemX, dotY - stemY);
+      const deg = Math.atan2(dotY - stemY, dotX - stemX) * 180 / Math.PI - 90;
 
-      let chosen = null;
-      for (const t of tries) {
-        const rect = { x: bx, x2: bx + it.w, y: t.by, y2: t.by + it.h };
-        if (!hit(rect)) { chosen = t; break; }
-      }
-      // 全部候选都被占：老实放最后那个（可能压住前面的，引线让用户还分得清谁是谁）
-      if (!chosen) chosen = tries[0] || { by: Math.max(minY, Math.min(it.ay - GAP - it.h, maxY)), below: false };
+      el.style.setProperty('--tail-x', `${Math.round(stemX)}px`);
+      el.style.setProperty('--tail-y', `${Math.round(stemY)}px`);
+      el.style.setProperty('--stem-x', `${Math.round(stemX)}px`);
+      el.style.setProperty('--stem-y', `${Math.round(stemY)}px`);
+      el.style.setProperty('--stem-h', `${Math.round(len)}px`);
+      el.style.setProperty('--stem-r', `${deg.toFixed(1)}deg`);
+      el.style.setProperty('--dot-x', `${Math.round(dotX)}px`);
+      el.style.setProperty('--dot-y', `${Math.round(dotY)}px`);
+    };
 
-      const { by, below: isBelow } = chosen;
-      placed.push({ x: bx, x2: bx + it.w, y: by, y2: by + it.h });
-
-      // ---- 尾巴 / 引线 / 锚点：三者一起才说明「这个气泡说的是这个地点」 ----
-      const tailX = Math.max(14, Math.min(it.ax - bx, it.w - 14));
-      const tipY = isBelow ? -TAIL_H : it.h + TAIL_H;
-      const dotX = it.ax - bx;
-      const dotY = it.ay - by;
-      const dx = dotX - tailX;
-      const dy = dotY - tipY;
-      const len = Math.hypot(dx, dy);
-      const deg = Math.atan2(dy, dx) * 180 / Math.PI - 90;
-
-      it.el.classList.toggle('below', isBelow);
-      it.el.style.left = `${Math.round(bx)}px`;
-      it.el.style.top = `${Math.round(by)}px`;
-      it.el.style.setProperty('--tail-x', `${Math.round(tailX)}px`);
-      it.el.style.setProperty('--dot-x', `${Math.round(dotX)}px`);
-      it.el.style.setProperty('--dot-y', `${Math.round(dotY)}px`);
-      it.el.style.setProperty('--stem-x', `${Math.round(tailX)}px`);
-      it.el.style.setProperty('--stem-y', `${Math.round(tipY)}px`);
-      it.el.style.setProperty('--stem-h', `${Math.round(len)}px`);
-      it.el.style.setProperty('--stem-r', `${deg.toFixed(1)}deg`);
+    groups.forEach(({ side, list }) => {
+      if (!list.length) return;
+      const w = list[0].w;
+      const x = side === 'left' ? dock.left : dock.right - w;
+      const ordered = [...list].sort((a, b) => a.ay - b.ay);
+      const total = ordered.reduce((s, it) => s + it.h, 0);
+      const avail = Math.max(80, dock.bottom - dock.top);
+      const gap = ordered.length > 1
+        ? Math.max(2, Math.min(10, (avail - total) / (ordered.length - 1)))
+        : 0;
+      const span = total + gap * (ordered.length - 1);
+      let y = dock.top + Math.max(0, (avail - span) / 2);
+      ordered.forEach((it) => { place(it, x, y, side); y += it.h + gap; });
     });
   }
 

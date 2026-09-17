@@ -138,6 +138,18 @@ kbd {
 }
 .map-label.dim { opacity: 0.32; }
 
+/* 2D 平面模式：地名贴在落点圆点**右侧**，锚点从「中心」改为「左缘中点」。
+   地名压在圆点上会把那个点整个盖掉，用户就看不出地点到底在哪。
+   引线也跟着从「向下 9px」改成「向左 10px」的横线，正好接回圆点。 */
+.map-label.side { transform: translate(0, -50%); }
+.map-label.side::before {
+  left: -10px; top: 50%; margin-top: -0.5px;
+  width: 10px; height: 1px;
+  background: linear-gradient(90deg, rgba(232,192,122,0), rgba(232,192,122,0.75));
+}
+.map-label.side:hover { transform: translate(0, -50%) scale(1.12); }
+.map-label.side.selected { transform: translate(0, -50%) scale(1.16); }
+
 /* ---------- 行迹气泡卡片 ----------
    选中一位诗人后，地图上每一处行迹地点挂一个气泡，罗列他在此地所作的诗文，
    气泡用「尾巴三角 + 引线 + 锚点圆点」指回地点本身。
@@ -225,6 +237,39 @@ kbd {
   border-left: 6px solid transparent; border-right: 6px solid transparent;
   border-top: 7px solid rgba(10, 21, 34, 0.95);
 }
+/* ---------- 停靠在地图左右两侧的卡片 ----------
+   卡片不再压在地图上方，而是排在左右两条空白带里（见 ui.js dockRect）。
+   于是尾巴要从「卡片下边缘」改到「朝内那条边的中点」，方向也跟着翻：
+     .side-left  卡片在左，尖角朝右  → 三角挂在右边缘
+     .side-right 卡片在右，尖角朝左  → 三角挂在左边缘
+   竖直位置由 --tail-y 给（JS 写的是卡片高度的一半）。 */
+.rb-bubble.side-left .rb-tail {
+  left: 100%; top: var(--tail-y, 50%); margin: -6px 0 0 0;
+  border-top: 6px solid transparent; border-bottom: 6px solid transparent;
+  border-left: 7px solid rgba(10, 21, 34, 0.95);
+  border-right: none;
+}
+.rb-bubble.side-right .rb-tail {
+  left: auto; right: 100%; top: var(--tail-y, 50%); margin: -6px 0 0 0;
+  border-top: 6px solid transparent; border-bottom: 6px solid transparent;
+  border-right: 7px solid rgba(10, 21, 34, 0.95);
+  border-left: none;
+}
+/* 锚点横向落在卡片自己的宽度范围里时，横向引线会横穿卡片本身
+   （屏幕上是一条金色细线压在卡片上）。这种情况改用纵向：
+     .side-top    锚点在卡片上方 → 三角挂上边，尖角朝上
+     .side-bottom 锚点在卡片下方 → 三角挂下边，尖角朝下
+   横向位置由 --tail-x 给（JS 写的是锚点被夹进卡片内的横坐标）。 */
+.rb-bubble.side-top .rb-tail {
+  left: var(--tail-x, 50%); top: auto; bottom: 100%; margin: 0 0 0 -6px;
+  border-left: 6px solid transparent; border-right: 6px solid transparent;
+  border-top: none; border-bottom: 7px solid rgba(10, 21, 34, 0.95);
+}
+.rb-bubble.side-bottom .rb-tail {
+  left: var(--tail-x, 50%); top: 100%; bottom: auto; margin: 0 0 0 -6px;
+  border-left: 6px solid transparent; border-right: 6px solid transparent;
+  border-bottom: none; border-top: 7px solid rgba(10, 21, 34, 0.95);
+}
 /* 引线：从三角尖端连到锚点圆点。写成「可旋转的 1px 细线」而不是竖直细线 ——
    气泡为了避让会被上下推开，靠近视口边缘时还会被横向夹回屏幕内，
    这都会让三角与锚点不再上下对齐；只有按实际夹角旋转，线才真的接得上。
@@ -244,12 +289,6 @@ kbd {
   margin: -3.5px 0 0 -3.5px;
   background: var(--gold-2);
   box-shadow: 0 0 0 3px rgba(232, 192, 122, 0.22), 0 0 10px rgba(255, 230, 176, 0.7);
-}
-
-/* 锚点太靠上时气泡改为挂在下方：三角翻到顶边，引线朝上 */
-.rb-bubble.below .rb-tail {
-  top: auto; bottom: 100%;
-  border-top: none; border-bottom: 7px solid rgba(10, 21, 34, 0.95);
 }
 
 /* 窄屏：气泡必须收窄，否则一两个就把整幅地图盖住了。 */

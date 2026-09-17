@@ -470,6 +470,181 @@
     rec('退出后相机回到版图取景（距离 > 10）', camDist() > 10, `${camDist().toFixed(2)}`);
     rec('地球按钮高亮已取消', !q('[data-view="earth"]').classList.contains('on'));
 
+    /* ---------- 9. 行迹在地球模式下（球面大圆航线） ----------
+       这是本轮新加的能力，也是原先最丑的一块：行迹沿用版图坐标系
+       （1 世界单位 ≈ 100km）的弧线抬升 0.55~3.6，放到半径 1 的球上
+       就是 3.6 个地球半径的巨型管子 —— 屏幕上那几根又粗又飘的线。
+       断言口径直接量**几何本身**（半径、管径、序号牌贴地半径），不读意图字段。 */
+    q('[data-mode="route"]').click();
+    await sleep(700);
+    const rItem = q('#routeList .route-item');
+    if (!rItem) {
+      rec('行迹列表有内容（地球行迹的前置）', false, '列表为空');
+    } else {
+      rItem.click();
+      await settled();
+      await sleep(500);
+      const nStops = document.querySelectorAll('#routeDetail .rp-stop').length;
+      rec('3D 下选中行迹 → 行迹已建', !!app.effects.routeGroup, `${nStops} 站`);
+      /* 记下 3D 行迹取景的距离。地图与平面共用同一套取景公式
+         （`d = max(11.5, max(size.x, size.z) * 2 + 8)`，方向向量是单位向量），
+         所以三种视图来回切之后距离都该回到这个值。 */
+      const distRoute = camDist();
+
+      /* 带着行迹切进地球 —— 这是「换视图必须整条重建」的那条路 */
+      q('[data-view="earth"]').click();
+      await settled();
+      await sleep(700);
+
+      rec('带着行迹进地球 → 仍是地球模式', app.state.earth === true);
+      rec('带着行迹进地球 → 球面航线已建', !!app.globe.routeGroup);
+      rec('带着行迹进地球 → 版图那份已清掉（不能把上个坐标系的线留在屏幕上）',
+        app.effects.routeGroup === null);
+      rec('球面序号牌数 = 行迹站数', app.globe.routeBadges.length === nStops,
+        `${app.globe.routeBadges.length} / ${nStops}`);
+
+      /* 关键：航线的抬升必须是「贴着地表飞」的量级。
+         实测最大半径 = 站点地形半径(≤1.0286) + 抬升(≤0.11)。 */
+      let rMax2 = 0;
+      app.globe.routeCurve.points.forEach((p) => { rMax2 = Math.max(rMax2, p.length()); });
+      rec('球面航线的抬升贴着地表（最大半径 < 1.16，不是版图那套抬 3.6）',
+        rMax2 < 1.16, `最大半径 ${rMax2.toFixed(4)}`);
+
+      const tubeR = app.globe.routeTube.geometry.parameters.radius;
+      rec('球面航线管径是「一条线」的量级（0 < r < 0.02，不是一根粗管子）',
+        tubeR > 0 && tubeR < 0.02, `管半径 ${tubeR}`);
+
+      /* 航线画了两层：深色底衬 + 发光航线本身。
+         只画发光那层的话，加色混合的米金色压在明亮的橄榄绿地形上会洗成一片白，
+         航线在中国大陆上空几乎看不见。 */
+      rec('球面航线带深色底衬（亮地形上也读得出线形）',
+        !!app.globe.routeCasing && app.globe.routeCasing.geometry.parameters.radius > tubeR,
+        app.globe.routeCasing
+          ? `底衬半径 ${app.globe.routeCasing.geometry.parameters.radius.toFixed(5)} vs 航线 ${tubeR.toFixed(5)}`
+          : '底衬缺失');
+
+      /* 几何顶点必须全是有限值。
+         这条是给一个真踩过的坑守门：Globe 的 markerComp 忘了初始化时，
+         buildRoute 里的 `0.0042 * this.markerComp` 算出 NaN，TubeGeometry
+         的顶点全变 NaN —— 球面上**整条航线一根线都画不出来**，
+         而 state.earth / routeGroup / 序号牌 / 拾取表全都正常，
+         只有管线静默消失，光看「routeGroup 存在」根本发现不了。 */
+      const tp = app.globe.routeTube.geometry.attributes.position;
+      let nanV = 0;
+      for (let i = 0; i < tp.count * 3; i++) if (!Number.isFinite(tp.array[i])) nanV += 1;
+      rec('球面航线几何没有 NaN 顶点（半径算成 NaN 时整条线会静默消失）',
+        nanV === 0, `NaN 分量 ${nanV} / ${tp.count * 3}`);
+
+      /* 负向验证：手动打进一个 NaN，上面那条必须真的数得出来 */
+      const keep0 = tp.array[0];
+      tp.array[0] = NaN;
+      let nanAfter = 0;
+      for (let i = 0; i < tp.count * 3; i++) if (!Number.isFinite(tp.array[i])) nanAfter += 1;
+      tp.array[0] = keep0;
+      rec('负向验证：NaN 顶点确实会被数出来（上面那条不是恒真）',
+        nanAfter === 1, `打入 1 个 NaN → 数出 ${nanAfter} 个`);
+
+      const badgeR = app.globe.routeBadges.map((b) => b.sprite.position.length());
+      rec('球面序号牌都贴在站点正上方（半径 0.99~1.08）',
+        badgeR.every((r) => r > 0.99 && r < 1.08),
+        `${Math.min(...badgeR).toFixed(3)} ~ ${Math.max(...badgeR).toFixed(3)}`);
+
+      /* 序号牌要**真的看得清**，也不能大得压住地球。
+         屏幕尺寸 = baseScale × fpx / 基准深度，与缩放无关（见下一条）。
+         1440×900 下 fpx ≈ 1679、基准深度 ≈ 4.33，故 0.070 → 约 27px；
+         地标是 13.9px。这里直接量屏幕像素，而不是读 baseScale 字段
+         （字段是意图，像素是事实）。 */
+      const badgePx = (b) => {
+        const d = depthOf(b.sprite.position);
+        return d > 0.05 ? (b.sprite.scale.x * fpx()) / d : null;
+      };
+      const pxB0 = badgePx(app.globe.routeBadges[0]);
+      rec('球面序号牌的屏幕尺寸够读又不压住地球（18~30px）',
+        pxB0 != null && pxB0 >= 18 && pxB0 <= 30,
+        `${pxB0 == null ? '测不到' : pxB0.toFixed(1) + 'px'}（地标约 13.9px）`);
+
+      /* 层级必须显式压过地标与飞线光点。
+         三者位置几乎重合，透明队列按「投影 z」排序，而序号牌只往外挪了 0.016 ——
+         站点偏离画面中心时这点径向偏移在视线方向上可能反而更远，
+         地标（加色混合、光晕比牌子大一圈）就被排在后面画，整块序号牌被洗成白。 */
+      rec('球面序号牌的层级高于航线与地标（renderOrder 定死，不靠 z 排序）',
+        app.globe.routeBadges.every((b) => b.sprite.renderOrder > (app.globe.routeTube.renderOrder || 0)),
+        `序号牌 ${app.globe.routeBadges[0].sprite.renderOrder} / 航线 ${app.globe.routeTube.renderOrder}`);
+
+      // 与地标同一条规则：拉远只缩小地球，序号牌不变小
+      const distBadge = camDist();
+      await setDistAt(Math.min(12, distBadge * 2));
+      const pxB1 = badgePx(app.globe.routeBadges[0]);
+      await setDistAt(distBadge);
+      rec('球面序号牌不随缩放变化（拉远 2 倍后变化 < 25%）',
+        pxB0 != null && pxB1 != null && Math.abs(pxB1 / pxB0 - 1) < 0.25,
+        `${pxB0 == null ? '?' : pxB0.toFixed(1)}px → ${pxB1 == null ? '?' : pxB1.toFixed(1)}px`);
+
+      const visM = app.globe.markers.filter((m) => m.sprite.visible).length;
+      rec('行迹聚焦在地球上也生效（只留行迹上的地标）', visM === nStops, `${visM} / ${nStops}`);
+
+      /* 负向验证：清掉聚焦集合，79 个地标必须全部回来 ——
+         否则上面那条可能是「本来就只有 9 个可见」的恒真断言。 */
+      const keepFocus = app.globe.routeFocus;
+      app.globe.setRouteFocus(null);
+      const visAll = app.globe.markers.filter((m) => m.sprite.visible).length;
+      app.globe.setRouteFocus(keepFocus);
+      rec('负向验证：清掉聚焦集合后 79 个地标全部回来（上面那条不是恒真）',
+        visAll === app.SITES.length, `${visAll} / ${app.SITES.length}`);
+
+      const picks = app.globe.pickables(app.camera);
+      rec('球面序号牌进入了拾取表（点序号也能选中该站）',
+        picks.some((o) => app.globe.routeBadges.some((b) => b.sprite === o)),
+        `可拾取 ${picks.length} 个`);
+
+      rec('行迹取景落在球面缩放的合法区间内',
+        camDist() > 1.4 && camDist() < 14, `距离 ${camDist().toFixed(2)}`);
+
+      /* ---- 换视图：行迹必须整条按新坐标系重建 ---- */
+      q('[data-view="flat"]').click();
+      await settled();
+      await sleep(800);
+      rec('带着行迹切 2D → 球面航线已清', app.globe.routeGroup === null);
+      rec('带着行迹切 2D → 平面线路已建', !!app.effects.routeGroup);
+      rec('带着行迹切 2D → 记下的模式是 flat', app.effects.routeMode === 'flat',
+        `routeMode=${app.effects.routeMode}`);
+      const ys = app.effects.routeCurve.points.map((p) => p.y);
+      rec('平面线路是「等高」的一条线（俯视下不偏离真实走向）',
+        Math.max(...ys) - Math.min(...ys) < 1e-6,
+        `y 极差 ${(Math.max(...ys) - Math.min(...ys)).toExponential(2)}`);
+      rec('平面序号牌贴地（抬升 ≤ 0.2 —— 2D 下序号就是落点标记）',
+        app.effects.routeBadges.every((b) => b.lift <= 0.2),
+        `最大抬升 ${Math.max(...app.effects.routeBadges.map((b) => b.lift)).toFixed(3)}`);
+      /* 换视图后必须**重新取景**，否则相机停在「默认版图视角」，
+         版图缩在一角、行迹几乎看不见（2D 下明明框得好好的，切到 3D 却像换了一条路线）。
+         地图与平面共用同一套取景公式，距离应回到 3D 行迹取景时的值。 */
+      rec('切 2D 后按新视图重新取景（不是停在默认版图视角）',
+        Math.abs(camDist() - distRoute) < 0.5,
+        `${camDist().toFixed(2)}（3D 行迹取景 ${distRoute.toFixed(2)}，默认版图约 17.8）`);
+
+      q('[data-view="flat"]').click();
+      await settled();
+      await sleep(800);
+      rec('带着行迹切回 3D → 记下的模式是 3d', app.effects.routeMode === '3d',
+        `routeMode=${app.effects.routeMode}`);
+      rec('带着行迹切回 3D → 序号牌抬到光柱顶端（不再是贴地的 0.12）',
+        app.effects.routeBadges.every((b) => b.lift > 1),
+        `最小抬升 ${Math.min(...app.effects.routeBadges.map((b) => b.lift)).toFixed(2)}`);
+      rec('带着行迹切回 3D → 按行迹重新取景（相机没留在默认版图视角）',
+        Math.abs(camDist() - distRoute) < 0.5,
+        `${camDist().toFixed(2)}（3D 行迹取景 ${distRoute.toFixed(2)}，默认版图约 17.8）`);
+
+      /* 收尾：退出行迹模式，把页面还原成「3D 探索」交给下一套脚本 */
+      q('#routeClose').click();
+      await settled();
+      await sleep(700);
+      rec('退出行迹 → 平面与球面两份几何都已清空',
+        app.effects.routeGroup === null && app.globe.routeGroup === null);
+      rec('退出行迹 → 回到 3D 探索模式（没有留下 2D / 地球的残留）',
+        app.state.earth === false && app.state.flat === false,
+        `earth=${app.state.earth} flat=${app.state.flat}`);
+    }
+
     return out;
   };
 
