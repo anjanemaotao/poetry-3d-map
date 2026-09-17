@@ -12,6 +12,8 @@ import { dynastyEra } from '../js/data/poetry.js';
 import { ROUTES, FEIHUA_KEYS } from '../js/data/meta.js';
 import { buildGeoQuiz, buildFillQuiz, buildFeihua, search } from '../js/data/poetry.js';
 import { POEMS_TEXTBOOK } from '../js/data/poems-textbook.js';
+import { WORLD_ELEV, LAND_OUTER, LAND_HOLE } from '../js/data/world.js';
+import { CHINA_GEO } from '../js/data/geo.js';
 
 let fail = 0;
 const bad = (msg) => { fail++; console.log('  ✗ ' + msg); };
@@ -320,7 +322,165 @@ console.log('[12] 抽屉开关位置');
   if (!n) ok(`${panelBlocks.length} 个面板外置开关，均不在面板内部`);
 }
 
+/* ---------- 13. 全球底图数据（地球模式） ---------- */
+// 地球模式由两套数据拼出来：1° 高程网格（起伏 + 上色）与 110m 陆地轮廓（海陆掩膜）。
+// 它们完全不参与主地图，改坏了主地图的 12 类校验一条都不会响 ——
+// 所以单独设一节，把「数据本身对不对」钉住。这里的断言全部对着**实际字节**算，
+// 不看数据文件里写着的 nx/ny/range 声明（那正是最容易和实际脱节的东西）。
+console.log('[13] 全球底图数据');
+{
+  const W = WORLD_ELEV;
+  const bin = Buffer.from(W.b64, 'base64');
+  let elev = null;
+  if (bin.length !== W.nx * W.ny * 2) {
+    bad(`高程网格字节数 ${bin.length} ≠ ${W.nx}×${W.ny}×2 = ${W.nx * W.ny * 2}（Int16 小端序，2 字节/点）`);
+  } else {
+    elev = new Int16Array(bin.buffer, bin.byteOffset, W.nx * W.ny);
+    ok(`高程网格 ${W.nx}×${W.ny}，字节数与 Int16 一致（${elev.length} 点）`);
+  }
+
+  if (elev) {
+    let lo = Infinity, hi = -Infinity;
+    for (let i = 0; i < elev.length; i++) { const v = elev[i]; if (v < lo) lo = v; if (v > hi) hi = v; }
+    if (lo !== W.min || hi !== W.max) {
+      bad(`声明的高程范围 ${W.min}~${W.max} 与实际 ${lo}~${hi} 不符 —— `
+        + 'range 被 globe.js 用作色带归一化基准，不一致会让地形色偏、高度比例失真');
+    } else {
+      ok(`高程范围与声明一致（${lo} ~ ${hi} m）`);
+    }
+
+    const at = (lon, lat) => {
+      const i = Math.round(((lon - W.lon0) % 360 + 360) % 360);
+      const j = Math.max(0, Math.min(W.ny - 1, Math.round(lat - W.lat0)));
+      return elev[j * W.nx + i];
+    };
+    // 采样点挑的都是「大范围地形」，避开 1° 网格下会被邻格平均掉的小地形。
+    // 马里亚纳海沟就是反例：它只有约 2° 宽，1° 网格上被两侧 4000m 深海一平均只剩
+    // −4593m（真实最深 −11034m）。所以这里只卡「明显比周围深」，
+    // 全局极值另有单独一条盯着。
+    const PLACES = [
+      ['珠峰一带', 86.9, 28.0, 5000, Infinity],
+      ['青藏高原', 88.0, 32.0, 4000, Infinity],
+      ['马里亚纳海沟', 142.0, 11.5, -Infinity, -4000],
+      ['太平洋中部', -150.0, 0.0, -Infinity, -3000],
+      ['大西洋中部', -30.0, 20.0, -Infinity, -3000],
+      ['北京', 116.4, 39.9, -50, 500],
+      ['拉萨', 91.1, 29.7, 3000, Infinity],
+      ['乌鲁木齐', 87.6, 43.8, 100, 2500],
+      ['海南岛', 109.8, 19.2, -50, 2000],
+      ['台北', 121.5, 25.0, -50, 2500],
+    ];
+    let pBad = 0;
+    for (const [name, lon, lat, min, max] of PLACES) {
+      const v = at(lon, lat);
+      if (!(v >= min && v <= max)) { bad(`${name}（${lon}°E ${lat}°N）高程 ${v}m 不在期望区间 [${min}, ${max}]`); pBad++; }
+    }
+    if (!pBad) ok(`${PLACES.length} 个采样点高程全部落在期望区间（珠峰 / 马里亚纳 / 青藏高原 / 北京 / 拉萨…）`);
+
+    // 全局极值：最深点必须真的在深海里（< -8000），最高点必须真的在高山上（> 5500）。
+    // 这一条防的是「数据被截断或换成了低精度版本」—— 那种情况下采样点可能还对，
+    // 但极值会明显缩水，地形起伏整体变平。
+    if (elev) {
+      let loI = 0, hiI = 0;
+      for (let i = 1; i < elev.length; i++) { if (elev[i] < elev[loI]) loI = i; if (elev[i] > elev[hiI]) hiI = i; }
+      const ll = (i) => `${-180 + (i % W.nx)}°E ${-90 + Math.floor(i / W.nx)}°N`;
+      if (!(elev[loI] < -8000)) bad(`全局最低点只有 ${elev[loI]}m（${ll(loI)}），深海地形被削平了`);
+      else if (!(elev[hiI] > 5500)) bad(`全局最高点只有 ${elev[hiI]}m（${ll(hiI)}），高山地形被削平了`);
+      else ok(`全局极值合理：最低 ${elev[loI]}m（${ll(loI)}）、最高 ${elev[hiI]}m（${ll(hiI)}）`);
+    }
+  }
+
+  /* 陆地轮廓：环的合法性 + 海陆掩膜与高程网格是否自洽 */
+  const ringsOk = (rings, label) => {
+    let n = 0;
+    rings.forEach((r, i) => {
+      if (r.length % 2) { bad(`${label} 第 ${i} 环坐标个数为奇数（${r.length}）`); n++; }
+      if (r.length < 6) { bad(`${label} 第 ${i} 环不足 3 个点（${r.length / 2}）`); n++; }
+      for (let k = 0; k < r.length; k += 2) {
+        if (!(r[k] >= -180 && r[k] <= 180) || !(r[k + 1] >= -90 && r[k + 1] <= 90)) {
+          bad(`${label} 第 ${i} 环第 ${k / 2} 点 (${r[k]}, ${r[k + 1]}) 越出经纬度范围`); n++; break;
+        }
+      }
+    });
+    return n;
+  };
+  const outerPts = LAND_OUTER.reduce((a, r) => a + r.length / 2, 0);
+  const holePts = LAND_HOLE.reduce((a, r) => a + r.length / 2, 0);
+  const rBad = ringsOk(LAND_OUTER, 'LAND_OUTER') + ringsOk(LAND_HOLE, 'LAND_HOLE');
+  if (rBad) { /* 已在 ringsOk 里逐条报过 */ } else if (LAND_OUTER.length < 100 || outerPts < 4000) {
+    bad(`陆地轮廓只有 ${LAND_OUTER.length} 环 / ${outerPts} 点，比 110m 数据的正常规模小得多（疑似被截断）`);
+  } else {
+    ok(`陆地轮廓 ${LAND_OUTER.length} 环 ${outerPts} 点 + 内环 ${LAND_HOLE.length} 环 ${holePts} 点，逐环合法`);
+  }
+
+  /* 点是否落在陆地上：射线法。掩膜错了的表现是「海岸线整体错位」，
+     在浏览器里看起来只是「地形怪怪的」，不看数据根本定位不到。 */
+  const inRing = (lon, lat, ring) => {
+    let inside = false;
+    const n = ring.length / 2;
+    for (let i = 0, j = n - 1; i < n; j = i++) {
+      const xi = ring[i * 2], yi = ring[i * 2 + 1];
+      const xj = ring[j * 2], yj = ring[j * 2 + 1];
+      if ((yi > lat) !== (yj > lat) && lon < ((xj - xi) * (lat - yi)) / (yj - yi) + xi) inside = !inside;
+    }
+    return inside;
+  };
+  const onLand = (lon, lat) => LAND_OUTER.some((r) => inRing(lon, lat, r))
+    && !LAND_HOLE.some((r) => inRing(lon, lat, r));
+  const MASK = [
+    ['北京', 116.4, 39.9, true], ['拉萨', 91.1, 29.7, true], ['乌鲁木齐', 87.6, 43.8, true],
+    ['海南岛', 109.8, 19.2, true], ['台北', 121.5, 25.0, true],
+    ['巴黎', 2.35, 48.85, true], ['开罗', 31.2, 30.0, true], ['巴西利亚', -47.9, -15.8, true],
+    ['太平洋中部', -150.0, 0.0, false], ['大西洋中部', -30.0, 20.0, false],
+    ['印度洋', 80.0, -20.0, false], ['马里亚纳海沟', 142.0, 11.5, false],
+  ];
+  let mBad = 0;
+  for (const [name, lon, lat, want] of MASK) {
+    const got = onLand(lon, lat);
+    if (got !== want) { bad(`海陆掩膜判错：${name}（${lon}°, ${lat}°）应为${want ? '陆地' : '海洋'}，实得${got ? '陆地' : '海洋'}`); mBad++; }
+  }
+  if (!mBad) ok(`${MASK.length} 个采样点的海陆判定全部正确（含内陆、海岛、四大洋）`);
+
+  /* 合规：全球底图只描述自然地理，不得混入任何政治边界层 */
+  const worldKeys = Object.keys(await import('../js/data/world.js')).sort().join(',');
+  if (worldKeys !== 'LAND_HOLE,LAND_OUTER,WORLD_ELEV') {
+    bad(`world.js 的导出变成 [${worldKeys}] —— 该文件只允许「高程 + 海陆轮廓」三项，`
+      + '任何行政/国界数据都必须来自 js/data/geo.js 的中国标准地图');
+  } else {
+    ok('world.js 只导出高程与海陆轮廓，不含任何政治边界');
+  }
+
+  /* 合规：地球上的中国版图必须包含台湾省、香港、澳门与南海诸岛。
+     这几项是领土要素，缺一项就是错的 —— 而地图上少画一块地方，
+     肉眼几乎发现不了（尤其在球面上），只能靠数据断言盯住。 */
+  const CHINA_NEED = [
+    ['710000', '台湾省'], ['810000', '香港特别行政区'],
+    ['820000', '澳门特别行政区'], ['100000_JD', '南海诸岛'],
+  ];
+  const codes = new Set(CHINA_GEO.map((f) => String(f.c)));
+  let cBad = 0;
+  for (const [code, name] of CHINA_NEED) {
+    if (!codes.has(code)) { bad(`中国版图数据缺少「${name}」（编码 ${code}）`); cBad++; }
+  }
+  if (!cBad) ok(`中国版图含台湾省、香港、澳门特别行政区与南海诸岛（共 ${CHINA_GEO.length} 个要素）`);
+
+  // 版图不得越出中国疆域范围（越界说明数据里混进了邻国或别的图层）
+  let outCnt = 0;
+  for (const f of CHINA_GEO) {
+    for (const poly of f.p) {
+      for (const ring of poly) {
+        for (const [lon, lat] of ring) {
+          if (lon < 73 || lon > 136 || lat < 3 || lat > 54) outCnt++;
+        }
+      }
+    }
+  }
+  if (outCnt) bad(`中国版图数据有 ${outCnt} 个顶点越出疆域范围（经 73~136、纬 3~54）`);
+  else ok(`中国版图 ${CHINA_GEO.reduce((a, f) => a + f.p.reduce((b, p) => b + p.reduce((d, r) => d + r.length, 0), 0), 0)} 个顶点全部落在疆域范围内`);
+}
+
 /* ---------- 结果 ---------- */
+
 console.log('');
 if (fail) {
   console.log(`❌ 校验失败：${fail} 项问题`);
