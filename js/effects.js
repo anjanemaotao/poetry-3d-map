@@ -2,6 +2,8 @@
 import * as THREE from 'three';
 import { lonLatToWorld, provinceAt, makeGlowTexture, makeCloudTexture } from './map3d.js';
 
+// 各朝代的地标配色。已在文件末尾导出给地球模式复用 —— 同一处诗境在两种视图里
+// 必须是同一个颜色，否则用户在两张图之间切换时会以为看的是两批地点。
 const ERA_COLOR = {
   xy: 0xb9a6ff, hw: 0x7ec8ff, jn: 0x6fe8cf,
   tang: 0xffc65e, song: 0xff8f76, yh: 0xd3a6ff,

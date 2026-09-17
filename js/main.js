@@ -10,7 +10,8 @@ import { SITES, SITE_MAP, ROUTES, ERA_MAP } from './data/poetry.js';
 import {
   buildMap, buildOcean, buildStars, buildRivers, lonLatToWorld, provinceAt, unprojectToLonLat,
 } from './map3d.js';
-import { Effects } from './effects.js';
+import { Effects, ERA_COLOR } from './effects.js';
+import { Globe, R as GLOBE_R, dirFromLonLat, lonLatFromDir } from './globe.js';
 import { UI } from './ui.js';
 
 /* ================= 启动进度上报 ================= */
@@ -30,6 +31,7 @@ const state = {
   layers: { rivers: true, labels: true, clouds: true },
   quizMode: false,
   flat: false,          // 2D 平面模式
+  earth: false,         // 地球模式（太空视角）
   routeFocus: null,     // Set<siteId>：只看某条行迹上的站点，null 表示不限制
 };
 
@@ -99,6 +101,21 @@ const effects = new Effects(scene);
 effects.createBeacons(SITES);
 effects.buildClouds(16);
 stage('点亮诗境地标', 68);
+
+/* ================= 地球 ================= */
+/**
+ * 地球是独立于地图的一层：进入地球模式时把地图那一整套整体隐藏，退出时原样恢复，
+ * 两者不共用几何、不共用取景，也就不需要为地球再写一套缩放补偿与拾取补偿。
+ *
+ * 懒构建 —— 贴图与球面几何加起来要几百毫秒，放在启动链上会拖慢所有人，
+ * 而绝大多数使用者并不会进地球模式。第一次点「地球」时再生成。
+ */
+const globe = new Globe({
+  renderer,
+  sites: SITES,
+  eraColor: ERA_COLOR,
+});
+scene.add(globe.root);
 
 /* ================= 行政区 → 诗境索引 ================= */
 /**
@@ -368,6 +385,220 @@ function setFlatMode(on, opts = {}) {
   if (!opts.quiet) ui.toast(on ? '已切换到 2D 平面地图（锁定旋转）' : '已回到 3D 地势地图');
 }
 
+/* ================= 地球模式 ================= */
+/**
+ * 进入 / 退出太空视角。
+ *
+ * 与 2D 平面模式的区别：2D 是「同一台相机换一个俯视角」，地球是**换一层内容** ——
+ * 所以要整体切换显隐，而不是只改取景。地图那一整套（地形 / 海洋 / 江河 / 光柱 /
+ * 云海 / 标注 / 气泡）在地球模式下全部隐藏，地球层在其余时候不可见。
+ *
+ * 相机的自由度也要换：地图是「俯视一块版图」，极角必须卡在 0.05~1.5，否则会钻到地下；
+ * 地球是「从太空看一颗球」，极角要放开到接近两极，用户才能真正朝任意方向转动它。
+ */
+// 默认视角把中国（约 104°E / 34°N）转到正面朝前 —— 这台地球是为中国古典诗词做的，
+// 一进去就该看见那簇诗境，而不是随机给一片大洋。相机放在「该地点的球面方向 × 距离」上，
+// 视线自然落在球心，该地点就落在画面正中，正北朝上。
+const EARTH_DIR = dirFromLonLat(104, 34).normalize();
+const EARTH_ZOOM_IN = 1.8;    // 选中某处诗境后拉近到的距离（一屏约 26° 跨度，东亚范围）
+/**
+ * 最近距离由**数据分辨率**定，不是由「能不能再靠近」定。
+ *
+ * 地球上的缩放比直觉猛得多：一屏可见的球心角跨度不是 2·acos(R/d)，
+ * 而是由视场角卡住的 —— 视线边缘 φ = fov/2 对应的球心角 θ 满足
+ *   tan φ = R·sinθ / (d − R·cosθ)
+ * 解出来（fov=30°、R≈1.0）：
+ *   d=5.34 → 跨度 164°（整颗地球）   d=3.0 → 72°   d=1.4 → 12.6°   d=1.08 → 2.4°
+ * 也就是说 d 从 1.4 走到 1.08 这「一小步」，跨度缩了 5 倍。
+ *
+ * 而高程数据是 **1° 网格**（ETOPO1 抽样，见 js/data/world.js）。d=1.08 时
+ * 整屏只有 2.4 个数据格，双线性插值出来必然是一片平滑的色块 ——
+ * 实测把相机放到阿尔卑斯上空：贴图在该处 9.5° 跨度内的对比度是 165，
+ * 而渲染出来只有 24，肉眼看就是一片发白，完全没有「地形的变化」。
+ * 同一位置 d=1.4（12.6° 跨度）的对比度是 172，正常。
+ *
+ * 取 1.4：跨度 12.6°、约 12 个数据格，是这套数据还撑得住的极限，
+ * 同时距球面 0.372（最高地形 1.028 处），远大于近裁剪面 0.2。
+ * 从默认视角到这里是 13 倍放大（164° → 12.6°），缩放本身已经很够用。
+ * 想再往里看，要换更细的高程数据，不是把 minDistance 调小。
+ */
+const EARTH_MIN = 1.4;
+const EARTH_MAX = 14;
+
+/**
+ * 近裁剪面必须按模式切换，否则「放大」会把整个地球裁没。
+ *
+ * 球面沿视线方向距相机的距离约是 d − R（d 为相机到球心距离，R ≈ 1.0~1.03）。
+ * 地图档的 near = 0.5 在 d < 1.53 时就把**整个可见球面**推进了近裁剪面之内：
+ * 实测 d = 1.35 与 1.10 两档，屏幕上只剩星空，地球彻底消失 ——
+ * 而滚轮能一路缩到 EARTH_MIN，也就是说「放大」这个功能有一整段是黑屏。
+ *
+ * 地球档取 0.2：d = EARTH_MIN 时最近的地面点在相机前方约 0.37，留有余量。
+ * 也不能取更小 —— 近裁剪面越小，远处（d 最大到 14）的深度分辨力越差：
+ * 水面壳相对球面只抬升 5e-4，near=0.02 时 z=14 处的深度分辨力约 5.9e-4，
+ * 两者同量级，海陆交界会开始起斑。near=0.2 时是 5.8e-5，安全。
+ * 退出时必须还原成 0.5：地图那边要的是大范围取景。
+ */
+const CAM_NEAR_MAP = 0.5;
+const CAM_NEAR_EARTH = 0.2;
+
+function setCameraNear(n) {
+  if (Math.abs(camera.near - n) < 1e-9) return;
+  camera.near = n;
+  camera.updateProjectionMatrix();
+}
+
+/**
+ * 默认太空取景距离：让**整颗地球**（含大气外壳）恰好落在左右面板之间的可视区里。
+ *
+ * 不能写死。可视区随窗口尺寸与响应式布局变化 —— 窄屏下两栏是盖在地图上的抽屉、
+ * 不占版面，写死就会出现「宽屏刚好看全、窄屏地球被面板切掉一半」。
+ *
+ * 球在屏幕上的角半径 α 满足 tanα = rad / √(d² − rad²)，要求它不超过
+ * 半个视场角乘以「可视区占全窗口的比例」，解出 d 即可。
+ */
+function earthDist() {
+  const W = window.innerWidth, H = window.innerHeight;
+  const inset = measureInset();
+  const freeW = Math.max(280, W - inset.left - inset.right);
+  const freeH = Math.max(240, H - inset.top - inset.bottom);
+  const tanV = Math.tan((camera.fov * Math.PI) / 360);
+  const tanH = tanV * camera.aspect;
+  const rad = GLOBE_R * 1.055;                       // 含大气辉光外壳
+  const fit = (T) => rad * Math.sqrt(1 + 1 / (T * T));
+  return Math.max(fit(tanV * (freeH / H)), fit(tanH * (freeW / W))) * 1.05;
+}
+let earthDistNow = 5;
+
+/**
+ * 地球模式下的光照：把主光改成**跟着相机走的太阳**。
+ *
+ * 主光在地图模式下是固定的一个方向，那是为「俯视一块版图」调的。到了地球上就不成立：
+ * 用户把球转到哪一面，那一面就可能是夜面 —— 实测选中一处诗境后，地球转到该地点正面
+ * 朝前，而那个方向恰好背光，整个画面只剩一片黑，地形与版图全看不见。
+ * 这里让光的方向跟着相机走（固定偏开约 30°），看到的那一面永远是亮的，
+ * 同时保留明暗过渡。退出时还原，地图那套光照完全不受影响。
+ *
+ * 两条踩过的坑：
+ *
+ * 1) 偏移量**不能**随缩放收敛。曾经写过 `off = 0.18 + 0.37·clamp((d−1.05)/2.6)`，
+ *    依据是「拉近后可见球冠只有 56°，固定偏 31.6° 会让中国北方整片变黑」——
+ *    但那个「变黑」其实另有原因（贴图 flipY 让地球上下颠倒，看到的是一片深蓝），
+ *    诊断错了。收敛的后果实测是：缩到最近处时夹角只剩 8.6°，光几乎正对镜头，
+ *    地形起伏对法线的扰动退化成二阶效应（正射光下 N·L ≈ 1 − α²/2），
+ *    整屏变成一片发白的平光，对比度量出来是 1 —— 正是「看不到地形变化」。
+ *    斜射光下同一扰动是一阶的（≈ α·sinθ），所以夹角越接近垂直越好，
+ *    只要不把晨昏线推进可见球冠之内。
+ *
+ * 2) 偏转要绕**屏幕横轴**，不能绕地球自转轴。绕 Y 轴偏 off 时，光与视线的
+ *    实际夹角是 off·cos(相机纬度)：赤道附近有 26°，转到极区就只剩 4°，
+ *    又退化成无影灯。绕「视线 × 上方向」偏转，则处处都是同一个夹角。
+ */
+const LIGHT_UP = new THREE.Vector3(0, 1, 0);
+const KEY_POS_MAP = key.position.clone();
+const RIM_POS_MAP = rim.position.clone();
+const lightDirTmp = new THREE.Vector3();
+const lightAxisTmp = new THREE.Vector3();
+/** 主光相对视线的夹角：30°。够斜、能照出山脊，又不至于把可见球冠边缘推进夜面 */
+const EARTH_LIGHT_OFF = 0.52;
+
+function updateEarthLights() {
+  lightDirTmp.copy(camera.position).normalize();
+  lightAxisTmp.crossVectors(lightDirTmp, LIGHT_UP);
+  if (lightAxisTmp.lengthSq() < 1e-8) lightAxisTmp.set(1, 0, 0);   // 相机正对两极时退化
+  lightAxisTmp.normalize();
+  key.position.copy(lightDirTmp).applyAxisAngle(lightAxisTmp, EARTH_LIGHT_OFF).multiplyScalar(60);
+  // 轮廓光放到背面偏侧：给球的边缘勾一道冷色，和主光的暖色分开
+  rim.position.copy(lightDirTmp).applyAxisAngle(lightAxisTmp, EARTH_LIGHT_OFF + 1.9).multiplyScalar(60);
+}
+
+function restoreMapLights() {
+  key.position.copy(KEY_POS_MAP);
+  rim.position.copy(RIM_POS_MAP);
+}
+
+let earthPrev = null;
+
+// HUD 底部那行说明两种模式说的不是一回事，不能混着显示 ——
+// 在地球模式下还写「依据中国标准地图 Albers 投影绘制」是错的。
+const HUD_NOTE_MAP = '底图依据中国标准地图 Albers 投影绘制<br/>含台湾省、香港特别行政区、澳门特别行政区及南海诸岛';
+const HUD_NOTE_EARTH = '全球地形依据 ETOPO1 高程数据绘制<br/>中国版图依据中国标准地图数据（含台湾省及南海诸岛）';
+
+function setEarthMode(on, opts = {}) {
+  if (state.earth === on) return;
+  if (on && state.flat) setFlatMode(false, { noView: true, quiet: true });
+  state.earth = on;
+  document.body.classList.toggle('earth-mode', on);
+
+  if (on) {
+    globe.build();
+    earthPrev = {
+      minPolarAngle: controls.minPolarAngle,
+      maxPolarAngle: controls.maxPolarAngle,
+      enablePan: controls.enablePan,
+      view: activeView === 'flat' ? lastView3D : activeView,
+    };
+
+    map.root.visible = false;
+    ocean.root.visible = false;
+    rivers.visible = false;
+    effects.beaconGroup.visible = false;
+    if (effects.routeGroup) effects.routeGroup.visible = false;
+    if (effects.cloudGroup) effects.cloudGroup.visible = false;
+    document.getElementById('labelLayer').style.display = 'none';
+    ui.updateRouteBubbles([]);
+
+    // 星空留着 —— 它就是太空背景
+    stars.visible = true;
+
+    controls.minDistance = EARTH_MIN;
+    controls.maxDistance = EARTH_MAX;
+    controls.minPolarAngle = 0.02;
+    controls.maxPolarAngle = Math.PI - 0.02;
+    controls.enablePan = false;
+    setCameraNear(CAM_NEAR_EARTH);
+
+    globe.show(true);
+    earthDistNow = earthDist();
+    /* 补偿基准取的是「相机将要落到的那处默认太空视角」，不是相机此刻的位置 ——
+       此刻相机还在版图视角上（距球心约 17.8，而这里只有 5.3），
+       拿它当基准会把 79 个地标一律压小近 4 倍（详见 globe.js captureRefAt）。 */
+    const earthHome = EARTH_DIR.clone().multiplyScalar(earthDistNow);
+    const earthAim = new THREE.Vector3(0, 0, 0);
+    globe.captureRefAt(earthHome, earthAim);
+    const note = document.querySelector('.hud-note');
+    if (note) note.innerHTML = HUD_NOTE_EARTH;
+    flyCamera(earthHome, earthAim, 1.5);
+  } else {
+    globe.show(false);
+    map.root.visible = true;
+    ocean.root.visible = true;
+    rivers.visible = state.layers.rivers;
+    effects.beaconGroup.visible = true;
+    if (effects.routeGroup) effects.routeGroup.visible = true;
+    if (effects.cloudGroup) effects.cloudGroup.visible = state.layers.clouds;
+    document.getElementById('labelLayer').style.display = state.layers.labels ? '' : 'none';
+
+    if (earthPrev) {
+      controls.minPolarAngle = earthPrev.minPolarAngle;
+      controls.maxPolarAngle = earthPrev.maxPolarAngle;
+      controls.enablePan = earthPrev.enablePan;
+    }
+    controls.maxDistance = 260;
+    restoreMapLights();
+    setCameraNear(CAM_NEAR_MAP);
+    const note = document.querySelector('.hud-note');
+    if (note) note.innerHTML = HUD_NOTE_MAP;
+    if (!opts.noView) applyView(VIEW[(earthPrev && earthPrev.view) || 'reset']);
+  }
+  document.querySelector('[data-view="earth"]').classList.toggle('on', on);
+  if (!opts.quiet) {
+    ui.toast(on
+      ? `已进入地球模式 · 拖动可任意方向转动地球，滚轮缩放（${SITES.length} 处诗境集中在中国）`
+      : '已回到中国地势图');
+  }
+}
+
 /* ================= 相机补间 ================= */
 let tween = null;
 function flyCamera(toPos, toTarget, dur = 1.3) {
@@ -463,15 +694,23 @@ function selectSite(id, opts = {}) {
   if (!site) return;
   selectedId = id;
   effects.setSelected(id);
+  globe.setSelected(id);
   ui.renderDetail(site, { poemId: opts.poemId, keyword: opts.keyword });
 
   if (opts.fly !== false) {
-    const b = effects.beacons.get(id);
-    if (b) {
-      const p = b.group.position.clone();
-      const dir = new THREE.Vector3(0, 0.80, 0.95).normalize();
-      const dist = 11.5;
-      flyCamera(p.clone().add(dir.multiplyScalar(dist)).setY(p.y + dist * 0.62), p.clone().setY(p.y + 0.3), 1.35);
+    if (state.earth) {
+      // 地球模式下没有「飞过去看光柱」这回事：改为把地球转到让该地点正面朝前。
+      // 相机放在「地点方向 × 距离」上，视线自然落在球心，该地点就落在画面正中。
+      const dir = globe.dirOf(id);
+      if (dir) flyCamera(dir.multiplyScalar(EARTH_ZOOM_IN), new THREE.Vector3(0, 0, 0), 1.35);
+    } else {
+      const b = effects.beacons.get(id);
+      if (b) {
+        const p = b.group.position.clone();
+        const dir = new THREE.Vector3(0, 0.80, 0.95).normalize();
+        const dist = 11.5;
+        flyCamera(p.clone().add(dir.multiplyScalar(dist)).setY(p.y + dist * 0.62), p.clone().setY(p.y + 0.3), 1.35);
+      }
     }
   }
   if (state.voice) {
@@ -552,6 +791,29 @@ function pickBeacon(e) {
 }
 
 /**
+ * 地球上的拾取：直接射线打地标精灵。
+ * 这里**不**做屏幕就近吸附 —— 79 处诗境全集中在中国那一小片里，
+ * 在太空视角下彼此只差几个像素，再加吸附圈反而会让用户点不到想要的那一个。
+ */
+function pickGlobe(e) {
+  if (!globe.built) return null;
+  setPointer(e);
+  raycaster.setFromCamera(pointer, camera);
+  // 传入相机：背面地标要被排除，否则会点中球体后面看不见的那一个
+  const hits = raycaster.intersectObjects(globe.pickables(camera), false);
+  return hits.length ? hits[0].object.userData.siteId : null;
+}
+
+/** 地球表面（含地形起伏）的命中点 → 经纬度，供 HUD 读数 */
+const globeHitPoint = new THREE.Vector3();
+function globeLonLatAt() {
+  if (!globe.built) return null;
+  const hits = raycaster.intersectObject(globe.surface, false);
+  if (!hits.length) return null;
+  return lonLatFromDir(globeHitPoint.copy(hits[0].point));
+}
+
+/**
  * HUD 经纬度读数的小数位：随相机拉近而增加。
  * 1° 纬度 ≈ 111km，所以 2 位 ≈ 1.1km、3 位 ≈ 110m、4 位 ≈ 11m ——
  * 放大到能看清细节时，读数也该细到能对上画面。
@@ -560,7 +822,12 @@ function pickBeacon(e) {
 let hudDecimalsCache = 0;
 function hudDecimals() {
   const dist = camera.position.distanceTo(controls.target);
-  const ref = effects.markerRef > 0 ? effects.markerRef : dist;
+  // 两种模式的「基准距离」量纲完全不同：地图是 16.8 世界单位的版图，
+  // 地球是 3.05 的球体。混用同一个基准会让地球一进去就显示 3 位小数，
+  // 而那时整颗地球才占满画面、读数细到 110m 毫无意义。
+  const ref = state.earth
+    ? (globe.markerRef > 0 ? globe.markerRef : dist)
+    : (effects.markerRef > 0 ? effects.markerRef : dist);
   const k = ref / Math.max(dist, 0.001);
   return k >= 8 ? 4 : k >= 2.5 ? 3 : 2;
 }
@@ -573,6 +840,20 @@ renderer.domElement.addEventListener('pointerdown', (e) => { downPos = { x: e.cl
 renderer.domElement.addEventListener('pointermove', (e) => {
   setPointer(e);
   raycaster.setFromCamera(pointer, camera);
+
+  /* 地球模式：只有地标可交互。
+     必须在这里显式分流 —— three.js 的射线检测**不看 visible**，
+     隐藏起来的省份网格照样会被打中，不拦就会「点中看不见的省份」。 */
+  if (state.earth) {
+    const ll = globeLonLatAt();
+    if (ll) { hudLL = ll; ui.updateHud(ll[0], ll[1], hudDecimals()); }
+    const gid = pickGlobe(e);
+    hoveredId = gid;
+    const gs = gid ? SITE_MAP.get(gid) : null;
+    ui.showHoverTip(e.clientX, e.clientY, gs ? `${gs.name}　${gs.sub}` : null);
+    renderer.domElement.style.cursor = gid ? 'pointer' : 'grab';
+    return;
+  }
 
   // 省份悬停
   const ph = raycaster.intersectObjects(map.hoverTargets, false);
@@ -645,6 +926,13 @@ renderer.domElement.addEventListener('pointerup', (e) => {
   const moved = Math.hypot(e.clientX - downPos.x, e.clientY - downPos.y);
   downPos = null;
   if (moved > 6) return; // 拖动不算点击
+
+  // 地球模式：点地标即选中，地球会自动转到让该地点正面朝前（见 selectSite）
+  if (state.earth) {
+    const gid = pickGlobe(e);
+    if (gid) selectSite(gid);
+    return;
+  }
 
   const id = pickBeacon(e);
   if (id) {
@@ -778,13 +1066,20 @@ function bindBars() {
         ui.toast(controls.autoRotate ? '自动旋转已开启' : '自动旋转已关闭');
         return;
       }
+      if (v === 'earth') {
+        setEarthMode(!state.earth);
+        document.querySelectorAll('#viewGroup button')
+          .forEach((x) => x.classList.toggle('active', x === b && state.earth));
+        return;
+      }
       if (v === 'flat') {
         setFlatMode(!state.flat);
         document.querySelectorAll('#viewGroup button')
           .forEach((x) => x.classList.toggle('active', x === b && state.flat));
         return;
       }
-      // 点其它视角按钮时自动退出 2D，但不在这里飞相机（下面会 applyView）
+      // 点其它视角按钮时自动退出 2D / 地球，但不在这里飞相机（下面会 applyView）
+      if (state.earth) setEarthMode(false, { noView: true, quiet: true });
       if (state.flat) setFlatMode(false, { noView: true, quiet: true });
       applyView(VIEW[v]);
       document.querySelectorAll('#viewGroup button').forEach((x) => x.classList.toggle('active', x === b));
@@ -833,9 +1128,19 @@ document.addEventListener('keydown', (e) => {
     if (ui.isNarrow() && ui.closeAnyDrawer()) return;
     if (!document.getElementById('quizCard').classList.contains('hidden')) { ui.closeQuiz(); return; }
     if (ui.isRouteMode()) { ui.exitRouteMode(); return; }
+    // 地球模式是「换了一层内容」，把它放在最外层：上面那些弹层 / 抽屉 / 面板
+    // 都先关，最后再退出地球模式 —— 否则按一次 Esc 会连着丢掉用户正在看的东西。
+    if (state.earth) { setEarthMode(false); return; }
   }
-  if (e.key === 'r' || e.key === 'R') applyView(VIEW.reset);
-  if (e.key === 't' || e.key === 'T') applyView(VIEW.top);
+  if (state.earth) {
+    // 地球模式下 r 回到默认太空视角（t 不适用：地球没有「俯视」这个预设）
+    if (e.key === 'r' || e.key === 'R') {
+      flyCamera(EARTH_DIR.clone().multiplyScalar(earthDistNow), new THREE.Vector3(0, 0, 0), 1.2);
+    }
+  } else {
+    if (e.key === 'r' || e.key === 'R') applyView(VIEW.reset);
+    if (e.key === 't' || e.key === 'T') applyView(VIEW.top);
+  }
   if (e.key === 'ArrowRight') stepSite(1);
   if (e.key === 'ArrowLeft') stepSite(-1);
   if (e.key === '1') document.querySelector('[data-mode="explore"]').click();
@@ -977,19 +1282,26 @@ function animate() {
 
   updateTween(dt);
   controls.update();
-  updateProvinces(dt);
-  effects.update(dt, camera, camera.position.distanceTo(controls.target));
+  // 两种模式驱动的东西完全不同：地球模式下地图那一整套都不可见，
+  // 再跑一遍它们的动画既浪费、又会把隐藏对象的尺寸算歪（切回来时会跳一下）。
+  if (state.earth) {
+    updateEarthLights();
+    globe.update(camera);
+  } else {
+    updateProvinces(dt);
+    effects.update(dt, camera, camera.position.distanceTo(controls.target));
+    ocean.mat.uniforms.uTime.value = t;
+    map.jdGroup.children.forEach((m) => { if (m.material[0]) m.material[0].emissiveIntensity = 0.6 + 0.25 * Math.sin(t * 1.6); });
+    updateLabels();
+    updateRouteBubbles();
+  }
   // 缩放会改变 HUD 读数精度：鼠标不动、只滚轮缩放时，也要重刷一次读数。
   const hd = hudDecimals();
   if (hd !== hudDecimalsCache) {
     hudDecimalsCache = hd;
     if (hudLL) ui.updateHud(hudLL[0], hudLL[1], hd);
   }
-  ocean.mat.uniforms.uTime.value = t;
   stars.rotation.y += dt * 0.006;
-  map.jdGroup.children.forEach((m) => { if (m.material[0]) m.material[0].emissiveIntensity = 0.6 + 0.25 * Math.sin(t * 1.6); });
-  updateLabels();
-  updateRouteBubbles();
   composer.render();
 }
 
@@ -1007,8 +1319,9 @@ window.addEventListener('resize', () => {
   // 气泡在窄屏会收窄，尺寸一变缓存的宽高就过期了 —— 不重量一遍，
   // 防重叠会按旧尺寸排，出现「看起来没重叠其实压住了」。
   ui.measureBubbles();
-  // 取景距离依赖视口与界面占位，尺寸变了就重新取景
-  if (!userAdjusted && !tween && !selectedId) applyView(VIEW[activeView], true);
+  // 取景距离依赖视口与界面占位，尺寸变了就重新取景。
+  // 地球模式不适用：那边是「从太空看球」，重新套用版图取景会把镜头拉回地图。
+  if (!state.earth && !userAdjusted && !tween && !selectedId) applyView(VIEW[activeView], true);
 });
 
 /* ================= 启动 ================= */
@@ -1036,6 +1349,7 @@ function boot() {
     lonLatToWorld, provinceAt, PROVINCE_SITES,
     pickBeacon, pickBeaconByScreen, selectSite, focusProvince, setFlatMode,
     applyView, VIEW, raycaster, pointer,
+    globe, setEarthMode, pickGlobe, lonLatFromDir,
   };
 
   setTimeout(() => {
