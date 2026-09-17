@@ -162,6 +162,30 @@
     rec('退出地球回 3D 后河流层又可见（user toggle 没被改坏）',
       riversGroup()?.visible === true, `vis=${riversGroup()?.visible}`);
 
+    /* 11.4 地球模式下点「江河」开关：闸门要同时管这一处。
+     * 否则用户切到地球后把江河点开，handler 又会无条件把河流拉回 true，
+     * 黄河 / 长江又横在球面上。修法与 applyVisibility 同公式。 */
+    $('[data-view="earth"]').click();
+    await sleep(2400);
+    $('#layerGroup [data-layer="rivers"]').click();
+    await sleep(300);
+    rec('地球模式下点「江河」开关 → 河流保持 hidden（handler 也加了 !state.earth 闸门）',
+      riversGroup()?.visible === false, `vis=${riversGroup()?.visible}`);
+    rec('江河开关的 state.layers.rivers 还是被翻了（不影响地图档）',
+      app.state.layers.rivers === false, `state.layers.rivers=${app.state.layers.rivers}`);
+    /* 还原江河开关，免得污染 e2e 之间的共享状态 */
+    $('#layerGroup [data-layer="rivers"]').click();
+    await sleep(300);
+    rec('还原江河开关后河流仍是 hidden（地球没退出）',
+      riversGroup()?.visible === false, `vis=${riversGroup()?.visible}`);
+    /* 退出地球：河流应当回到 state.layers.rivers = true 的状态 */
+    $('[data-view="earth"]').click();
+    await sleep(2400);
+    rec('退出地球后河流立即可见（云海同理）',
+      riversGroup()?.visible === true, `vis=${riversGroup()?.visible}`);
+    rec('退出地球后云海立即可见（user toggle 没被破坏）',
+      app.effects.cloudGroup?.visible === true, `cloudVis=${app.effects.cloudGroup?.visible}`);
+
     /* 收尾：把页面还原成 e2e 之间的标准状态（3D 探索 + 无行迹）。 */
     $('#routeClose')?.click();
     await sleep(900);

@@ -1274,8 +1274,12 @@ function bindBars() {
       }
       state.layers[key] = !state.layers[key];
       b.classList.toggle('on', state.layers[key]);
-      if (key === 'rivers') rivers.visible = state.layers.rivers;
-      if (key === 'clouds' && effects.cloudGroup) effects.cloudGroup.visible = state.layers.clouds;
+      /* 与 applyVisibility 一致：江河 / 云海在地球模式下必须藏。
+         早先这里只在 applyVisibility 里加了 !state.earth 闸门，
+         用户在地球档点「江河」开关还是会把河流拉回屏幕上 —— 同一类 bug，
+         改成统一公式 `user_toggle && view_compatible`。 */
+      if (key === 'rivers') rivers.visible = state.layers.rivers && !state.earth;
+      if (key === 'clouds' && effects.cloudGroup) effects.cloudGroup.visible = state.layers.clouds && !state.earth;
       if (key === 'labels') document.getElementById('labelLayer').style.display = state.layers.labels ? '' : 'none';
     };
   });
