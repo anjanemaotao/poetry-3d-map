@@ -308,6 +308,46 @@ console.log('[6] 列表项可访问名');
   ab(['wait', '900']);
   const routeName = String(evalValue(`(document.querySelector('#routeList .route-item') || {}).getAttribute ? document.querySelector('#routeList .route-item').getAttribute('aria-label') : ''`));
   rec('行迹列表项有 aria-label', routeName.length > 0 && /行迹 \d+ 站/.test(routeName), routeName);
+
+  // 「气泡」开关按钮：键盘可达 + 有可访问名 + 能被 Enter/Space 触发
+  // （这一段只跑一次，1440 宽；窄屏里 bubbleToggle 在抽屉里，路径不同）
+  const toggleInfo = evalValue(`JSON.stringify({
+    text: (document.querySelector('#bubbleToggle') || {}).innerText || '',
+    ariaPressed: document.querySelector('#bubbleToggle') ? document.querySelector('#bubbleToggle').getAttribute('aria-pressed') : null,
+    tabIndex: document.querySelector('#bubbleToggle') ? document.querySelector('#bubbleToggle').tabIndex : null,
+  })`);
+  rec('「气泡」开关存在 + 文字「气泡」', toggleInfo.text.trim() === '气泡', JSON.stringify(toggleInfo));
+  rec('「气泡」开关 aria-pressed 默认为 true', toggleInfo.ariaPressed === 'true', String(toggleInfo.ariaPressed));
+  rec('「气泡」开关可被 Tab 聚焦（tabIndex !== -1）', toggleInfo.tabIndex !== -1, String(toggleInfo.tabIndex));
+
+  // 从关闭按钮反向 Shift+Tab 到 bubbleToggle，确认它真的在 Tab 顺序里
+  ab(['eval', `document.querySelector('#routeClose').focus()`]);
+  ab(['wait', '200']);
+  ab(['press', 'Shift+Tab']);
+  ab(['wait', '200']);
+  const focused = evalValue(`JSON.stringify({ id: document.activeElement.id, tag: document.activeElement.tagName })`);
+  rec('从关闭按钮 Shift+Tab → 焦点落在「气泡」开关',
+    focused.id === 'bubbleToggle', JSON.stringify(focused));
+
+  // Enter 触发切换：aria-pressed 应翻成 false
+  ab(['press', 'Enter']);
+  ab(['wait', '300']);
+  const afterEnter = evalValue(`JSON.stringify({
+    pressed: document.querySelector('#bubbleToggle').getAttribute('aria-pressed'),
+    layerHidden: document.querySelector('#bubbleLayer').classList.contains('bubble-hidden')
+  })`);
+  rec('Enter 键触发「气泡」开关 → aria-pressed=false + 层隐藏',
+    afterEnter.pressed === 'false' && afterEnter.layerHidden === true, JSON.stringify(afterEnter));
+
+  // Space 也应能触发 —— agent-browser 的 press Space 只发 keydown 不发 keyup，
+  // 浏览器就没合成 click（工具边界）。真键盘下 Space 一定会带 keyup。
+  // 这里只验「Space keydown 到达按钮」，证明按钮能接收键盘事件；
+  // click 行为依赖浏览器默认合成，断言 Enter 已经覆盖。
+  ab(['eval', `window.__spaceSeen = false; document.querySelector('#bubbleToggle').addEventListener('keydown', e => { if (e.code === 'Space') window.__spaceSeen = true; }, { once: true })`]);
+  ab(['press', 'Space']);
+  ab(['wait', '200']);
+  const spaceReached = evalValue(`window.__spaceSeen === true`);
+  rec('Space 键 keydown 能到达「气泡」开关（click 由浏览器合成）', spaceReached === true, '');
 }
 
 /* ================= 结果 ================= */
