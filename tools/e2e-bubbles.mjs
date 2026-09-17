@@ -88,5 +88,65 @@ for (const id of routes) {
   console.log(`  ${flag} ${id.padEnd(14)} 站 ${String(stops).padStart(2)} / 气泡 ${String(m.n).padStart(2)} | 空白站 ${m.emptySites}${detail}`);
 }
 
+// ── 气泡开关（行迹面板里的「气泡」按钮）──
+// 默认可见 → 点一下整层隐藏 → 再点整层回来。位置和「数=站」等几何断言无关，
+// 独立测一遍确认 toggle 与 buildRouteBubbles / updateRouteBubbles 三者解耦。
+// 不量单气泡位置 —— 相机聚焦时多数气泡在屏外，但层仍该按 toggle 显隐。
+console.log(`\n→ 气泡开关`);
+// sweep 循环结束时停在 routes 数组最后一项（DOM 顺序最后，liqingzhao 3 站），
+// 不是第一项 libai —— n 不该硬编码 9。从 routes 数组直接拿最后一项的站数。
+const lastRouteId = routes[routes.length - 1];
+const lastRouteN = +ev(`JSON.stringify(+(((document.querySelector('#routeList .route-item[data-id=\\\"${lastRouteId}\\\"] .rc')||{}).textContent || '').match(/(\\d+)/) || [,'?'])[1])`);
+
+const layerDisplay = () => ev(`getComputedStyle(document.querySelector('#bubbleLayer')).display`);   // 直接返回字符串
+const layerHasHiddenClass = () => ev(`document.querySelector('#bubbleLayer').classList.contains('bubble-hidden')`);
+const btnHasOffClass = () => ev(`document.querySelector('#bubbleToggle').classList.contains('off')`);
+const pressed = () => ev(`document.querySelector('#bubbleToggle').getAttribute('aria-pressed') === 'true'`);   // boolean
+const totalBubbles = () => ev(`document.querySelectorAll('#bubbleLayer .rb-bubble').length`);   // 层里的气泡数（不算位置）
+
+// 当前已选中 routes 数组最后一项（默认显示）
+const beforeDisplay = layerDisplay();
+const beforeHidden = layerHasHiddenClass();
+const beforeN = totalBubbles();
+console.log(`  ${beforeDisplay === 'block' && beforeHidden === false && beforeN === lastRouteN ? '✅' : '❌'} 默认显示：display=block, 无 hidden 类, ${lastRouteN} 个气泡 (display=${beforeDisplay}, hidden=${beforeHidden}, n=${beforeN}, 期望=${lastRouteN})`);
+
+ab(['eval', `document.querySelector('#bubbleToggle').click()`]);
+sleep(500);
+const offDisplay = layerDisplay();
+const offHasHidden = layerHasHiddenClass();
+const offBtn = btnHasOffClass();
+const offPressed = pressed();
+console.log(`  ${offDisplay === 'none' && offHasHidden === true ? '✅' : '❌'} 点开关 → 层 display:none + hidden 类 (display=${offDisplay}, hidden=${offHasHidden})`);
+console.log(`  ${offBtn === true ? '✅' : '❌'} 按钮加 off 类`);
+console.log(`  ${offPressed === false ? '✅' : '❌'} aria-pressed=false (实际=${offPressed})`);
+
+ab(['eval', `document.querySelector('#bubbleToggle').click()`]);
+sleep(500);
+const onDisplay = layerDisplay();
+const onHasHidden = layerHasHiddenClass();
+const onBtn = btnHasOffClass();
+const onPressed = pressed();
+console.log(`  ${onDisplay === 'block' && onHasHidden === false ? '✅' : '❌'} 再点 → display=block + 去掉 hidden 类 (display=${onDisplay}, hidden=${onHasHidden})`);
+console.log(`  ${onBtn === false ? '✅' : '❌'} 按钮去掉 off 类`);
+console.log(`  ${onPressed === true ? '✅' : '❌'} aria-pressed=true (实际=${onPressed})`);
+
+// 切到另一位诗人 → 按钮偏好保留（用户 choice 不被覆盖）
+ab(['eval', `document.querySelector('#bubbleToggle').click()`]);   // 再关
+sleep(300);
+ab(['eval', `document.querySelector('#routeList .route-item[data-id="xinqiji"]').click()`]);
+sleep(2600);
+const afterSwitchDisplay = layerDisplay();
+const afterSwitchN = totalBubbles();
+console.log(`  ${afterSwitchDisplay === 'none' && afterSwitchN === 2 ? '✅' : '❌'} 切诗人偏好保留：仍隐藏，但 xinqiji 的 2 个气泡已建 (display=${afterSwitchDisplay}, n=${afterSwitchN})`);
+
+// 退出行迹模式 → 气泡清空，**按钮状态应保留**（不重置成「显示」—— 用户偏好不该被覆盖）。
+// layer 的 display 跟随按钮状态：off 时 display:none，on 时 display:block。前面已 off → 仍 none。
+ab(['eval', `document.querySelector('#routeClose').click()`]);
+sleep(800);
+const afterExitDisplay = layerDisplay();
+const afterExitBtn = btnHasOffClass();
+const afterExitN = totalBubbles();
+console.log(`  ${afterExitDisplay === 'none' && afterExitBtn === true && afterExitN === 0 ? '✅' : '❌'} 退出行迹：气泡清空，状态保留（display:none + 按钮 off）(display=${afterExitDisplay}, btnOff=${afterExitBtn}, n=${afterExitN})`);
+
 console.log(`\n→ ${routes.length} 条行迹 · ${passed} 通过 · ${failed} 失败`);
 process.exit(failed ? 1 : 0);

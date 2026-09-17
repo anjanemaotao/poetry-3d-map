@@ -156,6 +156,10 @@ kbd {
 }
 /* 只有卡片本体接收点击，层本身必须穿透 —— 否则整张地图都拖不动了 */
 .bubble-layer .rb-bubble { pointer-events: auto; }
+/* 行迹面板「气泡」开关关掉时：整层藏起来。
+   与 .hidden 的区别：JS 在「可见 / 隐藏」之间反复切换，
+   不能复用全局 .hidden （!important 会让后续状态切换失效）。 */
+.bubble-layer.bubble-hidden { display: none; }
 
 .rb-bubble {
   position: absolute;
@@ -165,12 +169,21 @@ kbd {
      它们会跟着一起变换，算出来的像素全错。 */
   padding: 5px 9px 6px;
   border-radius: 9px;
-  background: linear-gradient(180deg, rgba(13, 26, 41, 0.95), rgba(8, 17, 28, 0.95));
-  border: 1px solid var(--line);
-  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.5);
-  backdrop-filter: blur(7px);
+  /* 透明度 0.62：地图地形还透得见，文字靠 backdrop-blur 12px 顶住。
+     0.95 太闷了 —— 实测 16 张卡叠在一幅地图上时把地图全吃了。
+     降到 0.7 还偏闷，0.55 字开始糊，所以 0.62 + blur 加倍。 */
+  background: linear-gradient(180deg, rgba(13, 26, 41, 0.62), rgba(8, 17, 28, 0.62));
+  border: 1px solid rgba(232, 192, 122, 0.32);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+  backdrop-filter: blur(12px) saturate(120%);
+  -webkit-backdrop-filter: blur(12px) saturate(120%);
   cursor: default;
   animation: rbIn .28s ease both;
+  transition: background .25s, border-color .25s;
+}
+.rb-bubble:hover {
+  background: linear-gradient(180deg, rgba(13, 26, 41, 0.88), rgba(8, 17, 28, 0.88));
+  border-color: rgba(232, 192, 122, 0.6);
 }
 @keyframes rbIn { from { opacity: 0; } to { opacity: 1; } }
 @media (prefers-reduced-motion: reduce) { .rb-bubble { animation: none; } }
@@ -798,6 +811,39 @@ body.rb-open .route-panel { bottom: calc(96px + var(--rb-h, 176px)); }
   display: flex; align-items: center; justify-content: space-between;
   padding: 12px 14px; border-bottom: 1px solid rgba(255,255,255,0.08);
   font-size: 12px; letter-spacing: 0.2em; color: var(--gold-2);
+}
+/* 头部右侧两个按钮（气泡开关 + ✕）的容器 —— justify-content 留着，
+   把开关挤到标题和关闭按钮之间 */
+.rp-head > span { flex: 1; }
+.rp-head-actions { display: flex; align-items: center; gap: 8px; }
+
+/* 气泡开关：圆形小点 + 「气泡」两字。状态由 .on / .off 切换。
+   aria-pressed 与 .on 同步（JS 负责）。 */
+.bubble-toggle {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 4px 10px; border-radius: 999px;
+  border: 1px solid rgba(232, 192, 122, 0.4);
+  background: transparent;
+  color: var(--gold-2);
+  font: 600 11px var(--ui); letter-spacing: 0.1em;
+  cursor: pointer;
+  transition: background .18s, border-color .18s, color .18s;
+}
+.bubble-toggle .bt-dot {
+  width: 7px; height: 7px; border-radius: 50%;
+  background: var(--gold-2);
+  box-shadow: 0 0 6px rgba(232, 192, 122, 0.7);
+  transition: background .18s, box-shadow .18s;
+}
+.bubble-toggle:hover { background: rgba(232, 192, 122, 0.1); border-color: rgba(232, 192, 122, 0.65); }
+.bubble-toggle:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--bg-2), 0 0 0 4px var(--gold-2);
+}
+.bubble-toggle.off { color: rgba(242, 234, 216, 0.4); border-color: rgba(242, 234, 216, 0.18); }
+.bubble-toggle.off .bt-dot {
+  background: rgba(242, 234, 216, 0.25);
+  box-shadow: none;
 }
 .rp-body { overflow-y: auto; padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; }
 .route-item {

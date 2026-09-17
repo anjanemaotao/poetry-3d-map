@@ -24,6 +24,7 @@ export class UI {
     this.bubbleEls = new Map();      // 行迹气泡：气泡键 -> 元素
     this._bubbleStops = [];          // 与气泡一一对应的行迹站点（顺序固定，供每帧投影）
     this._bubbleSizes = new Map();   // 气泡键 -> {w,h}，量一次缓存，别每帧读 offsetHeight
+    this.bubbleVisible = true;       // 「气泡」开关状态：行迹面板里的按钮控制
   }
 
   /* ================= 初始化 ================= */
@@ -36,6 +37,7 @@ export class UI {
     this.bindQuiz();
     this.bindRoutes();
     this.bindRegionBar();
+    this.bindBubbleToggle();
     this.updateStatStrip();
   }
 
@@ -909,6 +911,31 @@ export class UI {
       box.appendChild(d);
     });
     $('#routeClose').onclick = () => this.exitRouteMode();
+  }
+
+  /**
+   * 行迹面板里的「气泡」开关。
+   * 默认显示；切到关时把整个 #bubbleLayer display:none，重新打开时恢复。
+   * 与「地名」图层开关是两条独立的开关 —— 关地名也带关气泡（更省心），
+   * 但关气泡不会带关地名（用户可能就是想看地名不要气泡）。
+   */
+  bindBubbleToggle() {
+    const btn = $('#bubbleToggle');
+    if (!btn) return;
+    this.syncBubbleToggleUI();
+    btn.addEventListener('click', () => {
+      this.bubbleVisible = !this.bubbleVisible;
+      this.syncBubbleToggleUI();
+    });
+  }
+  syncBubbleToggleUI() {
+    const btn = $('#bubbleToggle');
+    if (!btn) return;
+    btn.classList.toggle('off', !this.bubbleVisible);
+    btn.classList.toggle('on', this.bubbleVisible);
+    btn.setAttribute('aria-pressed', this.bubbleVisible ? 'true' : 'false');
+    const layer = $('#bubbleLayer');
+    if (layer) layer.classList.toggle('bubble-hidden', !this.bubbleVisible);
   }
 
   /**
