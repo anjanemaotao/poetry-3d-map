@@ -46,14 +46,23 @@ function freshPage() {
 
 freshPage();
 
-const out = ab(['eval', fs.readFileSync(path.join(HERE, 'e2e-earth.js'), 'utf8')]);
-const a = out.indexOf('[');
-const b = out.lastIndexOf(']');
-if (a < 0 || b < a) {
-  console.error('✗ 输出里找不到 JSON 数组：\n' + out.slice(0, 800));
-  process.exit(1);
-}
-const R = JSON.parse(out.slice(a, b + 1));
+const evalScript = (file) => {
+  const out = ab(['eval', fs.readFileSync(path.join(HERE, file), 'utf8')]);
+  const a = out.indexOf('[');
+  const b = out.lastIndexOf(']');
+  if (a < 0 || b < a) {
+    console.error('✗ 输出里找不到 JSON 数组：\n' + out.slice(0, 800));
+    process.exit(1);
+  }
+  return JSON.parse(out.slice(a, b + 1));
+};
+
+const R = [];
+R.push(...evalScript('e2e-earth.js'));
+/* 第 10 节（地名标注 + 右键拖动）拆到独立文件后单独 eval —— 一口气跑完全部
+   脚本会让 agent-browser 的 daemon 撞 EAGAIN（"Resource temporarily unavailable"）。
+   两次小批量 eval 之间 daemon 有喘息窗口，错误概率降到接近 0。 */
+R.push(...evalScript('e2e-earth-extras.js'));
 
 R.forEach((x) => console.log(`${x.pass ? '✓' : '✗'} ${x.name}${x.extra ? '  —— ' + x.extra : ''}`));
 const pass = R.filter((x) => x.pass).length;

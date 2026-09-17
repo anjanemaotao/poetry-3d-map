@@ -72,6 +72,12 @@ controls.maxPolarAngle = 1.5;
 controls.minPolarAngle = 0.05;
 controls.autoRotateSpeed = 0.42;
 
+/* 画布上禁掉浏览器右键菜单。
+   没有这一步，右键拖动到一半菜单就弹出来，拖动被迫中断 ——
+   地图上的「右键平移」和地球上的「右键转动」都会变得不可用。
+   画布是一个纯粹的三维视口，没有文字可选、也没有链接，拦掉右键菜单没有副作用。 */
+renderer.domElement.addEventListener('contextmenu', (e) => e.preventDefault());
+
 /* ================= 灯光 ================= */
 scene.add(new THREE.AmbientLight(0x53789a, 0.92));
 const key = new THREE.DirectionalLight(0xfff0d8, 1.72);
@@ -482,6 +488,21 @@ const EARTH_MIN = 1.4;
 const EARTH_MAX = 14;
 
 /**
+ * 地球模式下**地名标注**的「放大闸门」：相机到球心 ≤ 此值时才考虑显示地名。
+ *
+ * 取值依据与 EARTH_MIN 同源 —— 可见跨度由视场角决定（见上面的推导）：
+ * d=5.34 → 164°（整颗地球）、d=3.4 → 约 88°、d=2.0 → 约 32°、d=1.4 → 12.6°。
+ * 79 处诗境全挤在中国那一小片里，d=5.34 时它们在屏幕上只占不到 40px，
+ * 这时画地名只会互相压成一团黑块；拉到 3.4 以内，地标之间才拉开到塞得进文字的距离。
+ *
+ * 这只是**粗筛**——「某一处旁边到底有没有空位」由防重叠排版逐帧判定，
+ * 所以从太空视角一路拉近时地名是**逐个冒出来**的，不会一到阈值就全部涌出。
+ */
+const EARTH_LABEL_DIST = 3.4;
+/** 地名相对地标光点的横向让开量：光点 13.9px、行迹序号牌 27px，让 16px 才不会压住它们 */
+const EARTH_LABEL_DX = 16;
+
+/**
  * 近裁剪面必须按模式切换，否则「放大」会把整个地球裁没。
  *
  * 球面沿视线方向距相机的距离约是 d − R（d 为相机到球心距离，R ≈ 1.0~1.03）。
@@ -592,6 +613,7 @@ function applyEarthMode(on, opts = {}) {
       minPolarAngle: controls.minPolarAngle,
       maxPolarAngle: controls.maxPolarAngle,
       enablePan: controls.enablePan,
+      mouseRight: controls.mouseButtons.RIGHT,
       view: activeView === 'flat' ? lastView3D : activeView,
     };
 
@@ -601,7 +623,12 @@ function applyEarthMode(on, opts = {}) {
     effects.beaconGroup.visible = false;
     if (effects.routeGroup) effects.routeGroup.visible = false;
     if (effects.cloudGroup) effects.cloudGroup.visible = false;
-    document.getElementById('labelLayer').style.display = 'none';
+    /* 地名标注层**不整层关掉** —— 地球模式下也有地名要显示（拉近之后逐个冒出来）。
+       但地图那批标签此刻还留在上一帧的屏幕位置上，直接留着会闪一下「地图的地名
+       浮在地球上」，所以先逐个隐藏（空数组 = 一个都不显示），
+       之后由 updateEarthLabels 按球面坐标重新排。 */
+    ui.syncLabels([]);
+    document.getElementById('labelLayer').style.display = state.layers.labels ? '' : 'none';
 
     // 星空留着 —— 它就是太空背景
     stars.visible = true;
@@ -611,6 +638,13 @@ function applyEarthMode(on, opts = {}) {
     controls.minPolarAngle = 0.02;
     controls.maxPolarAngle = Math.PI - 0.02;
     controls.enablePan = false;
+    /* 地球模式下右键拖动 = **转动地球**，不是平移。
+       平移会把 controls.target 挪离球心，而地球这一整套都假定 target 恒为球心：
+       markerScale 用的是「相机到球心的距离」，行迹取景、选中时「把该点转到正面朝前」、
+       近半球判定 P·C > |P|² 全都是相对球心算的 —— target 一挪，这些会同时失准，
+       而且用户很容易把地球拖出画面找不回来。所以右键给 ROTATE：
+       在球体上「移动」本来就是转动，这也是唯一不会破坏上面那些前提的做法。 */
+    controls.mouseButtons.RIGHT = THREE.MOUSE.ROTATE;
     setCameraNear(CAM_NEAR_EARTH);
 
     globe.show(true);
@@ -638,6 +672,7 @@ function applyEarthMode(on, opts = {}) {
       controls.minPolarAngle = earthPrev.minPolarAngle;
       controls.maxPolarAngle = earthPrev.maxPolarAngle;
       controls.enablePan = earthPrev.enablePan;
+      controls.mouseButtons.RIGHT = earthPrev.mouseRight;   // 还原成地图的「右键平移」
     }
     controls.maxDistance = 260;
     restoreMapLights();
@@ -648,7 +683,7 @@ function applyEarthMode(on, opts = {}) {
   }
   if (!opts.quiet) {
     ui.toast(on
-      ? `已进入地球模式 · 拖动可任意方向转动地球，滚轮缩放（${SITES.length} 处诗境集中在中国）`
+      ? `已进入地球模式 · 左键或右键拖动可任意方向转动地球，滚轮缩放；拉近后自动显示地名（${SITES.length} 处诗境集中在中国）`
       : '已回到中国地势图');
   }
 }
@@ -1247,14 +1282,22 @@ function bindBars() {
     ui.toast(`巡游范围：${e.target.selectedOptions[0].textContent}（${tour.list.length} 处）`);
     if (tour.playing) { stopTour(); startTour(); }
   };
+
+  document.getElementById('btnShortcuts').onclick = () => ui.toggleShortcuts();
 }
 
 /* ================= 键盘 ================= */
 document.addEventListener('keydown', (e) => {
   if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
   if (e.code === 'Space') { e.preventDefault(); tour.playing ? stopTour() : startTour(); }
+  // ? = Shift + /。放在整个键盘处理的最前面：它是「说明」，
+  // 打开时后面的视角 / 模式快捷键都不该跟着触发。
+  if (e.key === '?') { e.preventDefault(); ui.toggleShortcuts(); return; }
   if (e.key === 'Escape') {
     // 由内向外逐层关闭：一次 Esc 只收掉最上面那一层，避免把用户想保留的内容一起关掉
+    // 快捷键说明是最后打开的那层，先收它 —— 否则按一次 Esc 关掉的是诗词弹窗，
+    // 说明还挂在屏幕上，看着像 Esc 失灵。
+    if (ui.isShortcutModalOpen()) { ui.closeShortcuts(); return; }
     if (ui.isPoemModalOpen()) { ui.closePoemModal(); return; }
     if (ui.isRegionBarOpen()) { ui.hideRegionBar(); return; }
     // 窄屏的抽屉盖在地图上，是「当前这一层」，Esc 先收它。
@@ -1309,11 +1352,12 @@ function updateProvinces(dt) {
 
 /* ================= 标注投影（带防重叠排版） ================= */
 const tmpV = new THREE.Vector3();
-const placed = [];   // 已占位的屏幕矩形
+const placed = [];   // 已占位的屏幕矩形（地图用）
 
-function rectHit(r) {
-  for (let i = 0; i < placed.length; i++) {
-    const q = placed[i];
+/** 与某张已占位矩形表求交。地球标注用的是另一张表，故显式传入。 */
+function rectHit(r, list = placed) {
+  for (let i = 0; i < list.length; i++) {
+    const q = list[i];
     if (r.x < q.x2 && r.x2 > q.x && r.y < q.y2 && r.y2 > q.y) return true;
   }
   return false;
@@ -1376,6 +1420,78 @@ function updateLabels() {
       dim: false,
     });
   });
+  ui.syncLabels(entries);
+}
+
+/**
+ * 地球模式的地名标注。
+ *
+ * 不塞进 updateLabels，理由与「气泡单独一份」相同：两者要回答的问题不同。
+ * 地图那套的锚点是光柱顶端（3D）/ 落点圆点（2D），可见性读的是 effects.beacons；
+ * 地球这边锚点是球面地标 Sprite，而且必须先剔掉**背面**那些被球体挡住的点 ——
+ * 否则地名会凭空浮在被挡住的那一侧，看着像「地球上还有一批看不见的地点」。
+ *
+ * 「位置富裕」是逐帧判出来的，不是按距离写死的：
+ * 相机拉近后地标在屏幕上散开，防重叠排版自然会放行越来越多地名；
+ * 拉远时它们重新挤到一起，超出的那些就重新隐去。
+ */
+const placedEarth = [];
+function updateEarthLabels() {
+  const layer = document.getElementById('labelLayer');
+  const on = state.layers.labels && globe.built && globe.root.visible
+    && camera.position.length() <= EARTH_LABEL_DIST;
+  if (!on) {
+    if (layer) layer.style.display = 'none';
+    return;
+  }
+  layer.style.display = '';
+
+  const w = window.innerWidth, h = window.innerHeight;
+  const cam = camera.position;
+  placedEarth.length = 0;
+
+  const list = [];
+  for (const m of globe.markers) {
+    if (!m.sprite.visible) continue;                 // 行迹聚焦时隐去的站点不标注
+    const p = m.sprite.position;
+    if (p.dot(cam) <= p.lengthSq()) continue;        // 背面：被地球挡住，见 globe.js pickables
+    list.push({ m, depth: cam.distanceTo(p) });
+  }
+  // 优先级：选中 > 悬停 > 离相机近（近的先占位，符合「先看眼前的」）
+  list.sort((a, b) => {
+    const pa = a.m.site.id === selectedId ? -1000 : a.m.site.id === hoveredId ? -900 : a.depth;
+    const pb = b.m.site.id === selectedId ? -1000 : b.m.site.id === hoveredId ? -900 : b.depth;
+    return pa - pb;
+  });
+
+  const entries = [];
+  let shown = 0;
+  const MAX = 22;
+  for (const x of list) {
+    tmpV.copy(x.m.sprite.position).project(camera);
+    const p = tmpV;
+    const sx = (p.x * 0.5 + 0.5) * w + EARTH_LABEL_DX;
+    const sy = (-p.y * 0.5 + 0.5) * h;
+    const isFocus = x.m.site.id === selectedId || x.m.site.id === hoveredId;
+    const halfW = (x.m.site.name.length * 13 + 20) / 2;
+    // 与 2D 一样走「左对齐、贴在锚点右侧」（CSS .map-label.side）：
+    // 居中的话地名会正好压住那个 13.9px 的地标光点。
+    const rect = { x: sx, x2: sx + halfW * 2, y: sy - 11, y2: sy + 11 };
+    let visible = p.z < 1 && p.x > -1.05 && p.x < 1.05 && p.y > -1.05 && p.y < 1.05
+      // 贴右边缘时整条地名会被切掉，宁可不显示 —— 用户转一下地球它就回来了
+      && sx + halfW * 2 < w - 6 && sx > 4;
+    if (visible && !isFocus) {
+      if (shown >= MAX || rectHit(rect, placedEarth)) visible = false;
+      else { placedEarth.push(rect); shown += 1; }
+    } else if (visible && isFocus) {
+      placedEarth.push(rect);
+    }
+    entries.push({
+      site: x.m.site, x: sx, y: sy, visible, side: true,
+      selected: x.m.site.id === selectedId,
+      dim: false,
+    });
+  }
   ui.syncLabels(entries);
 }
 
@@ -1445,6 +1561,9 @@ function animate() {
     updateEarthLights();
     globe.update(camera);
     globe.updateRoute(camera);
+    // 标注也要在地球上跑一份：拉近之后地名逐个冒出来，是「我在看哪里」的唯一线索。
+    // 不复用地图那套（锚点不同、还要剔背面），详见 updateEarthLabels。
+    updateEarthLabels();
     // 行迹卡片在地球模式下也要跟着走：卡片是停靠在左右两侧的，
     // 不会盖住球面，所以没有理由把它关掉 —— 关了反而会让用户以为「地球上没有诗」。
     updateRouteBubbles();
@@ -1512,6 +1631,9 @@ function boot() {
     applyView, VIEW, raycaster, pointer,
     globe, setEarthMode, pickGlobe, lonLatFromDir,
     setViewMode, syncViewButtons, rebuildRoute, frameRoute, buildRouteInView,
+    // 地球模式下的地名标注：回归脚本要量「拉近后有、拉远后没有」，
+    // 就得知道门槛值，并且能在改完相机后立刻跑一遍而不是等下一帧。
+    updateEarthLabels, EARTH_LABEL_DIST,
   };
 
   setTimeout(() => {

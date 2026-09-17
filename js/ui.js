@@ -748,6 +748,49 @@ export class UI {
     $('#poemModal').addEventListener('keydown', (e) => {
       if (e.key === 'Tab') this.trapFocus($('#poemModal'), e);
     });
+    // 快捷键说明弹窗：与诗词弹窗同一套关闭路径（关闭按钮 / 遮罩 / Esc / Tab 困住）
+    $('#shortcutModalClose').onclick = () => this.closeShortcuts();
+    $('#shortcutModalMask').onclick = () => this.closeShortcuts();
+    $('#shortcutModal').addEventListener('keydown', (e) => {
+      if (e.key === 'Tab') this.trapFocus($('#shortcutModal'), e);
+    });
+  }
+
+  /* ================= 快捷键说明 ================= */
+  /**
+   * 打开 / 关闭快捷键说明。
+   *
+   * 焦点处理与诗词弹窗完全一致：**打开时把焦点移进去、关闭时还给触发元素**。
+   * 少了前一半，Tab 仍在背后那张地图的界面里游走，键盘用户会以为「弹窗打开了但键盘不管用」；
+   * 少了后一半，焦点掉回 <body>，下次 Tab 又从顶栏重新走一遍。
+   */
+  toggleShortcuts() {
+    if (this.isShortcutModalOpen()) this.closeShortcuts();
+    else this.openShortcuts();
+  }
+
+  openShortcuts() {
+    const el = $('#shortcutModal');
+    if (!el || !el.classList.contains('hidden')) return;
+    this._scReturnFocus = document.activeElement;
+    el.classList.remove('hidden');
+    const first = $('#shortcutModalClose');
+    if (first) first.focus();
+  }
+
+  closeShortcuts() {
+    const el = $('#shortcutModal');
+    if (!el || el.classList.contains('hidden')) return;
+    el.classList.add('hidden');
+    const back = this._scReturnFocus;
+    this._scReturnFocus = null;
+    // 触发元素可能已经不在文档里了，先确认再还焦点
+    if (back && document.contains(back) && typeof back.focus === 'function') back.focus();
+  }
+
+  isShortcutModalOpen() {
+    const el = $('#shortcutModal');
+    return !!el && !el.classList.contains('hidden');
   }
 
   /**
