@@ -888,7 +888,9 @@ body.rb-open .hud { bottom: calc(96px + var(--rb-h, 176px)); }
 /* 练习卡居中在底部，会整个压住右下角的 HUD（实测重叠 24k px²）；练习时也无需看经纬度 */
 body.quiz-open .hud { display: none; }
 .hud-row { display: flex; gap: 8px; justify-content: flex-end; }
-.hud-row b { color: rgba(232,192,122,0.75); font-weight: 500; min-width: 62px; }
+/* min-width 保证 2 位小数时数字区宽度稳定；text-align: right 保证
+   放大后小数位变多（4 位）时数字仍靠右，不会把「经度」标签挤得忽左忽右。 */
+.hud-row b { color: rgba(232,192,122,0.75); font-weight: 500; min-width: 62px; text-align: right; }
 .hud-note { margin-top: 6px; font-size: 9.5px; color: rgba(242,234,216,0.26); line-height: 1.6; }
 
 .toast {

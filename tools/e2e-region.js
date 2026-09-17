@@ -101,7 +101,8 @@
     let best = Infinity;
     const p = new (app.lonLatToWorld(0, 0).constructor)();
     app.effects.beacons.forEach((b) => {
-      p.copy(b.group.position); p.y += 0.9;
+      // 抬到拾取柱体中部；柱体随缩放补偿缩短，这里乘同一个系数
+      p.copy(b.group.position); p.y += 0.9 * (b.group.scale.y || 1);
       const q = p.project(app.camera);
       const sx = app.renderer.domElement.getBoundingClientRect().left + (q.x * 0.5 + 0.5) * app.renderer.domElement.getBoundingClientRect().width;
       best = Math.min(best, Math.abs(sx - x));
@@ -371,8 +372,17 @@
 
       /* ================= 6. 行迹气泡卡片 ================= */
       // 选了诗人后，地图上每个行迹站点挂一个气泡，罗列他在此地所作的诗文。
-      // 等镜头飞行 1.7s 落定再做断言 —— 中途量高度/重叠会拿到中间帧。
-      await sleep(2000);
+      /* 等镜头飞完并停稳。原先固定 sleep(2000)，而飞行要 1.7s，只剩 300ms 余量 ——
+         实测会偶发在途中测量：锚点还在移动，气泡布点就会算出一堆重叠
+         （「5 对重叠」「2 对重叠」各见过一次，重跑又全绿）。
+         改成轮询相机位置直到不再变化，与 e2e-layout 的 settle() 同一种做法。 */
+      let lastCam = null;
+      for (let i = 0; i < 60; i++) {
+        const k = app.camera.position.toArray().map((n) => n.toFixed(4)).join(',');
+        if (k === lastCam) break;
+        lastCam = k;
+        await sleep(120);
+      }
       const bs = [...document.querySelectorAll('#bubbleLayer .rb-bubble')];
       rec('气泡层有内容', bs.length === stops, `${bs.length} 个 / 行迹 ${stops} 站`);
       const items6 = bs.map((b) => {

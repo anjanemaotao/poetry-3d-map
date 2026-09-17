@@ -314,7 +314,12 @@ let userAdjusted = false;
 function applyView(v, instant = false) {
   const f = frameView(v);
   const pos = f.target.clone().add(f.dir.clone().multiplyScalar(f.dist));
-  controls.minDistance = Math.min(5, f.dist * 0.35);
+  // 向内可拉近到默认取景距离的约 1/14（原为 1/3.4）：
+  // 原来最多只能拉近 3.4 倍，视域还有四百多公里宽，「放大查看细节」根本无从谈起
+  // —— 连相距 5.8km 的金陵与秦淮都只差 17px。标记不再随缩放变大之后，
+  // 拉近倍数就是纯粹的细节增益，所以这里一并放宽。
+  // 下限取 1.2 而不是更小：相机 near 面在 0.5，再近会开始裁掉脚下地形。
+  controls.minDistance = Math.min(1.2, f.dist * 0.08);
   activeView = v.id || activeView;
   userAdjusted = false;
   if (instant) {
@@ -502,7 +507,9 @@ function pickBeaconByScreen(cx, cy, tol = 26) {
   effects.beacons.forEach((b, id) => {
     if (!b.visible || b.hit.userData.disabled) return;
     v.copy(b.group.position);
-    v.y += 0.9;
+    // 抬到光柱中部。光柱随缩放补偿缩短，这里必须乘同一个系数 ——
+    // 否则放大后按固定 0.9 世界单位取点，吸附圈会飘在光柱上方，点不中。
+    v.y += 0.9 * (b.group.scale.y || 1);
     const p = v.project(camera);
     if (p.z > 1) return;
     const sx = (p.x * 0.5 + 0.5) * window.innerWidth;
@@ -530,7 +537,9 @@ function pickBeacon(e) {
       const b = effects.beacons.get(id);
       if (!b) return;
       v.copy(b.group.position);
-      v.y += 0.9;
+      // 抬到拾取柱体的中部。柱体随缩放补偿一起缩，这里必须乘同一个系数，
+      // 否则放大后按固定 0.9 世界单位取点会落到柱体上方、射线扑空。
+      v.y += 0.9 * (b.group.scale.y || 1);
       const p = v.project(camera);
       const sx = (p.x * 0.5 + 0.5) * window.innerWidth;
       const sy = (-p.y * 0.5 + 0.5) * window.innerHeight;
@@ -541,6 +550,23 @@ function pickBeacon(e) {
   }
   return pickBeaconByScreen(e.clientX, e.clientY);
 }
+
+/**
+ * HUD 经纬度读数的小数位：随相机拉近而增加。
+ * 1° 纬度 ≈ 111km，所以 2 位 ≈ 1.1km、3 位 ≈ 110m、4 位 ≈ 11m ——
+ * 放大到能看清细节时，读数也该细到能对上画面。
+ * 判据用「参考距离 / 当前距离」而不是绝对距离，窗口尺寸变化时不会漂。
+ */
+let hudDecimalsCache = 0;
+function hudDecimals() {
+  const dist = camera.position.distanceTo(controls.target);
+  const ref = effects.markerRef > 0 ? effects.markerRef : dist;
+  const k = ref / Math.max(dist, 0.001);
+  return k >= 8 ? 4 : k >= 2.5 ? 3 : 2;
+}
+
+// 最近一次鼠标所指的经纬度：缩放会改变读数精度，鼠标不动时也要用它重刷一次。
+let hudLL = null;
 
 renderer.domElement.addEventListener('pointerdown', (e) => { downPos = { x: e.clientX, y: e.clientY }; });
 
@@ -569,7 +595,8 @@ renderer.domElement.addEventListener('pointermove', (e) => {
   const hit = new THREE.Vector3();
   if (raycaster.ray.intersectPlane(groundPlane, hit)) {
     const ll = unprojectToLonLat(hit.x, hit.z);
-    ui.updateHud(ll[0], ll[1]);
+    hudLL = ll;
+    ui.updateHud(ll[0], ll[1], hudDecimals());
   }
 
   // 地标悬停
@@ -918,13 +945,18 @@ function updateRouteBubbles() {
   if (!state.layers.labels) { ui.updateRouteBubbles([]); return; }
 
   const w = window.innerWidth, h = window.innerHeight;
-  // 锚点取光柱顶端序号牌再往上一点：正好是气泡该「指」的那个位置
-  const ANCHOR_Y = state.flat ? 0.9 : 2.35;
+  /* 锚点取光柱顶端序号牌再往上一点：正好是气泡该「指」的那个位置。
+     抬升量必须乘上该站点当前的缩放补偿 —— 序号牌的高度是 2.05·comp，
+     而 comp 随缩放变化（行迹取景时约 0.68）。写成固定世界高度的话，
+     光柱缩了、锚点没缩，气泡会整体飘到序号牌上方近 90px 并挤在一起
+     （实测 e2e-region「气泡之间互不重叠」因此报 5 对重叠）。
+     2.36 = 序号牌中心 2.05 + 半高 0.31，是 comp = 1 时的原始值。 */
   const entries = targets.map((t) => {
     const b = effects.beacons.get(t.siteId);
     if (!b || !b.visible) return { x: 0, y: 0, visible: false };
+    const comp = b.group.scale.y || 1;
     tmpV.copy(b.group.position);
-    tmpV.y += ANCHOR_Y;
+    tmpV.y += (state.flat ? 0.9 : 2.36) * comp;
     const p = tmpV.clone().project(camera);
     const onScreen = p.z < 1 && p.x > -1.05 && p.x < 1.05 && p.y > -1.05 && p.y < 1.05;
     return {
@@ -946,7 +978,13 @@ function animate() {
   updateTween(dt);
   controls.update();
   updateProvinces(dt);
-  effects.update(dt, camera);
+  effects.update(dt, camera, camera.position.distanceTo(controls.target));
+  // 缩放会改变 HUD 读数精度：鼠标不动、只滚轮缩放时，也要重刷一次读数。
+  const hd = hudDecimals();
+  if (hd !== hudDecimalsCache) {
+    hudDecimalsCache = hd;
+    if (hudLL) ui.updateHud(hudLL[0], hudLL[1], hd);
+  }
   ocean.mat.uniforms.uTime.value = t;
   stars.rotation.y += dt * 0.006;
   map.jdGroup.children.forEach((m) => { if (m.material[0]) m.material[0].emissiveIntensity = 0.6 + 0.25 * Math.sin(t * 1.6); });
@@ -980,6 +1018,12 @@ function boot() {
   bindBars();
   applyVisibility();
   applyView(VIEW.reset, true);
+  // 标记缩放补偿的基准：全局取「相机到 target 的距离」，逐站点取「该站点到相机的距离」。
+  // 逐站点那份才是光柱/光圈用的（标记的屏幕尺寸只取决于它自己到相机的距离）。
+  // 只在这里定一次，不跟着 applyView 变 —— 否则切到「2D 平面」等预设时
+  // 基准一变，标记大小会莫名其妙地跳一下。
+  effects.setMarkerRef(camera.position.distanceTo(controls.target));
+  effects.captureMarkerRefs(camera);
   ui.syncChips();
   ui.updateStatStrip();
   animate();

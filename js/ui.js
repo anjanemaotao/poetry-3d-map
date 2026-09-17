@@ -1070,7 +1070,13 @@ export class UI {
     const GAP = 22;      // 气泡与锚点的默认间距
     const PAD = 6;       // 气泡之间要留的缝
     const STEP = 12;     // 避让时每次挪动的距离
-    const MAX_TRIES = 28; // 每方向最多 14 格 = 168px，再远引线就长得不像话了
+    /* 每方向最多搜 40 格 = 480px。原先 14 格（168px）不够用：
+       气泡宽 184px，而一条行迹的锚点 x 往往只跨三百来像素，同一 y 层最多并排 2 个，
+       于是 9 个气泡要 5 个 y 层；而 ±168px 在视口里只提供约 4 层。槽位一耗尽就落到
+       兜底分支（「老实放最后那个，可能压住前面的」）—— 李白 9 站实测因此有 2 对重叠。
+       搜索范围放宽到 480px 后可用层数翻倍。不必担心引线过长：候选位由近到远排，
+       只有近处真被占满时才会用到远处的槽位。 */
+    const MAX_TRIES = 80;
     const TAIL_H = 7;    // 三角高度，与 CSS 的 border-top 一致
 
     const placed = [];
@@ -1429,8 +1435,13 @@ export class UI {
     tip.classList.remove('hidden');
   }
 
-  updateHud(lon, lat) {
-    $('#hudLon').textContent = lon == null ? '—' : `${lon.toFixed(2)}°E`;
-    $('#hudLat').textContent = lat == null ? '—' : `${lat.toFixed(2)}°N`;
+  /**
+   * HUD 经纬度读数。decimals 由调用方按当前缩放级别给出（拉近→位数更多），
+   * 默认 2 位，与历史行为一致。
+   */
+  updateHud(lon, lat, decimals = 2) {
+    const d = Math.min(6, Math.max(0, decimals | 0));
+    $('#hudLon').textContent = lon == null ? '—' : `${lon.toFixed(d)}°E`;
+    $('#hudLat').textContent = lat == null ? '—' : `${lat.toFixed(d)}°N`;
   }
 }
