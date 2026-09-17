@@ -128,6 +128,44 @@
     rec('退出地球模式后回到 3D 探索', app.state.earth === false && app.state.flat === false,
       `earth=${app.state.earth} flat=${app.state.flat}`);
 
+    /* ---------- 11. 行迹模式下地球档「看不到版图装饰」 ----------
+     * 触发链路：3D 地图 + 选中行迹 → 切到地球 → applyVisibility 又被 rebuildRoute
+     * 触发了，把 rivers.visible 强行设成 state.layers.rivers = true，
+     * 于是黄河 / 长江 / 京杭大运河那几条按版图坐标画的管子直接横在球面上，
+     * 1 世界单位 ≈ 100km 到半径 1 的球上尺寸离谱。
+     *
+     * 修法（在 applyVisibility 里加 !state.earth 闸门）后这条必须绿。
+     * 也测「退出地球回 3D 后又能看到河流」，确认 user toggle 没被破坏。 */
+    /* 11.1 进 3D + 选中行迹，验证河流在 */
+    $('#routeClose')?.click();
+    await sleep(900);
+    $('[data-mode="route"]').click();
+    await sleep(900);
+    $('#routeList .route-item').click();
+    await sleep(3500);
+    const riversGroup = () => app.scene.children.find((c) => c.type === 'Group' && c.children.length === 3);
+    rec('3D + 行迹状态下河流层可见（默认 state.layers.rivers = true）',
+      riversGroup()?.visible === true, `vis=${riversGroup()?.visible}`);
+
+    /* 11.2 切到地球，验证河流层被藏 */
+    $('[data-view="earth"]').click();
+    await sleep(2400);
+    rec('切到地球后河流层 hidden（applyVisibility 的 !state.earth 闸门生效）',
+      riversGroup()?.visible === false, `vis=${riversGroup()?.visible}`);
+    rec('切到地球后河流层 hidden 期间，云海也跟着藏（云海同理）',
+      app.effects.cloudGroup?.visible === false,
+      `cloudVis=${app.effects.cloudGroup?.visible}`);
+
+    /* 11.3 退出地球回 3D，验证河流回来 */
+    $('[data-view="earth"]').click();
+    await sleep(2400);
+    rec('退出地球回 3D 后河流层又可见（user toggle 没被改坏）',
+      riversGroup()?.visible === true, `vis=${riversGroup()?.visible}`);
+
+    /* 收尾：把页面还原成 e2e 之间的标准状态（3D 探索 + 无行迹）。 */
+    $('#routeClose')?.click();
+    await sleep(900);
+
     return out;
   };
 

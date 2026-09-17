@@ -732,8 +732,15 @@ function applyVisibility() {
   // 否则行迹聚焦后版图只剩 9 根光柱、地球上却还亮着 79 个点。
   if (globe.built) globe.setRouteFocus(state.quizMode ? null : state.routeFocus);
   ui.refreshList(visibleSites.map((s) => s.id));
-  rivers.visible = state.layers.rivers;
-  if (effects.cloudGroup) effects.cloudGroup.visible = state.layers.clouds;
+  /* 河流 / 云海是地图档的装饰层 —— 进了地球模式它们就**完全不该显示**。
+     早先这里无条件 `rivers.visible = state.layers.rivers`，每次切到地球后
+     rebuildRoute → applyVisibility 都把 rivers.visible 重新拉成 true，
+     于是黄河 / 长江 / 京杭运河这几条又粗又长的管子直接横在球面上。
+     （在版图坐标系里 1 世界单位 ≈ 100km，到半径 1 的球上尺寸变得离谱。）
+     修法：把「用户在江河 / 云海开关」与「当前是否在地球」相与。
+     applyEarthMode 那边的 rivers.visible = false / 一起改保持一致。 */
+  rivers.visible = state.layers.rivers && !state.earth;
+  if (effects.cloudGroup) effects.cloudGroup.visible = state.layers.clouds && !state.earth;
   tour.list = scopeList(tour.scope);
   refreshRegionPanel();
 }
