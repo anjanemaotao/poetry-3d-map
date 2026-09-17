@@ -5,10 +5,16 @@
  *         - 气泡数 = 行迹站数（差的根因是 buildRouteBubbles 漏挂 / 多挂）
  *         - 气泡两两之间互不重叠（防重叠算法是否撑得住）
  *         - 每个气泡都在视口内（出界 = 引线指不到锚点）
+ *         - **每个气泡都停靠在左右两条空白带里**（不能压在地图中央）
+ *         - 每个气泡都带了方向类（side-left / side-right，决定引线从哪条边出发）
  *         - 每个气泡都装了诗作或显式「未见存世诗作」（留空会让用户以为是 bug）
  *
  * 五层验证之外的一个独立层 —— 因为气泡层有「站点少 → 撑得开，
  * 站点多 → 塞不下」的退化曲线，每加一条行迹都要重跑一次。
+ *
+ * 「停靠左右」这条是后加的：原先只验「不出界」，而卡片全堆在画面正中
+ * 同样不出界 —— 用户要的是「诗词卡片放在地图的左右两侧空白区域」，
+ * 所以要拿 ui.dockRect() 实测的空白带当判据。
  */
 import { execFileSync } from 'node:child_process';
 
@@ -47,11 +53,19 @@ console.log(`→ 共 ${routes.length} 条行迹\n`);
 const MEASURE = `JSON.stringify((() => {
   const bs = [...document.querySelectorAll('#bubbleLayer .rb-bubble')];
   const W = innerWidth, H = innerHeight;
+  const ui = window.__app.ui;
+  /* 停靠带要现算：面板开合/视口变化都会改它，缓存的可能是上一轮的 */
+  ui.invalidateDock();
+  const dock = ui.dockRect();
   const boxes = bs.map(e => { const r = e.getBoundingClientRect();
     return { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height),
              name: (e.querySelector('.rb-name')||{}).textContent || '?',
              poem: (e.querySelector('.rb-poem-line')||{}).textContent || null,
              none: !!e.querySelector('.rb-none'),
+             sideL: e.classList.contains('side-left'),
+             sideR: e.classList.contains('side-right'),
+             sideT: e.classList.contains('side-top'),
+             sideB: e.classList.contains('side-bottom'),
              shown: getComputedStyle(e).display !== 'none' }; });
   let ov = 0, worst = 0;
   for (let i=0;i<boxes.length;i++) for (let j=i+1;j<boxes.length;j++) {
@@ -61,7 +75,13 @@ const MEASURE = `JSON.stringify((() => {
     if (ox>2 && oy>2) { ov++; worst = Math.max(worst, ox*oy); }
   }
   const out = boxes.filter(b => b.x < 0 || b.y < 0 || b.x+b.w > W || b.y+b.h > H).map(b => b.name);
-  return { n: boxes.length, ov, worst, out,
+  /* 卡片必须停靠在左右两条空白带里 —— 不能压在中间的地图区。
+     这是「诗词卡片不要放在地图上方」那条需求的守门人：
+     光看「不出界」是不够的，卡片全堆在画面正中也不出界。 */
+  const offDock = boxes.filter(b => b.x < dock.left - 1 || b.x + b.w > dock.right + 1).map(b => b.name);
+  const noSide = boxes.filter(b => (b.sideL ? 1 : 0) + (b.sideR ? 1 : 0) + (b.sideT ? 1 : 0) + (b.sideB ? 1 : 0) !== 1).map(b => b.name);
+  return { n: boxes.length, ov, worst, out, dock,
+           offDock, noSide,
            noContent: boxes.filter(b => !b.poem && !b.none).length,
            emptySites: boxes.filter(b => b.none).length };
 })())`;
@@ -98,6 +118,8 @@ for (const id of routes) {
     ['数=站', m.n === stops],
     ['不重叠', m.ov === 0],
     ['不出界', m.out.length === 0],
+    ['停靠左右', m.offDock.length === 0],
+    ['有方向', m.noSide.length === 0],
     ['有内容', m.noContent === 0],
   ];
   const ok = checks.every(([, v]) => v);
@@ -105,7 +127,7 @@ for (const id of routes) {
   const fails = checks.filter(([, v]) => !v).map(([n]) => n).join('、');
   const flag = ok ? '✅' : '❌';
   const detail = ok ? '' :
-    `  ❌ ${fails} (n=${m.n}, ov=${m.ov}, out=${m.out.join(',')||'无'}, empty=${m.noContent})`;
+    `  ❌ ${fails} (n=${m.n}, ov=${m.ov}, out=${m.out.join(',')||'无'}, 出带=${m.offDock.join(',')||'无'}, 无方向=${m.noSide.join(',')||'无'}, empty=${m.noContent})`;
   console.log(`  ${flag} ${id.padEnd(14)} 站 ${String(stops).padStart(2)} / 气泡 ${String(m.n).padStart(2)} | 空白站 ${m.emptySites}${detail}`);
 }
 

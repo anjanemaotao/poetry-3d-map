@@ -153,12 +153,28 @@
   viewBtns.forEach((b) => b.click());
   await sleep(300);
   rec('视角按钮全部可点且不报错', true, viewBtns.map((b) => b.dataset.view).join(','));
-  // 上一行会把「2D 平面」也点一遍（它在 #viewGroup 里是最后一个），
-  // 若不退出，脚本跑完页面就停在 flat-mode，会污染后一套脚本的初始状态
-  // （历史症状：连跑时 e2e-region 的「切 2D」断言全挂、右栏开关位置错位）。
-  // 这里主动退回 3D，保证本脚本自身是「无副作用」的。
-  if (app.state && app.state.flat) { app.setFlatMode(false, { quiet: true }); await sleep(350); }
-  rec('视角开关跑完复位回 3D（不污染后续脚本）', !(app.state && app.state.flat));
+  /* 上一行会把「2D 平面」和「地球」都点一遍（两个都在 #viewGroup 里），
+     而这两个是**互斥**开关：点「地球」会先退出 2D 再进地球，
+     所以循环结束时页面停在太空视角、而不是 flat-mode。
+     若不退出，脚本跑完就污染后一套脚本的初始状态
+     （历史症状：连跑时 e2e-region 的「切 2D」断言全挂、右栏开关位置错位）。 */
+  if (app.state && (app.state.flat || app.state.earth)) {
+    app.setViewMode('3d', { quiet: true });
+    await sleep(400);
+  }
+  // 「自转」是最后一个按钮，循环结束会把自动旋转打开 —— 一并复位，
+  // 否则后续脚本量到的相机方位一直在漂。
+  if (app.controls && app.controls.autoRotate) {
+    app.controls.autoRotate = false;
+    const sp = $('[data-view="spin"]');
+    if (sp) sp.classList.remove('on');
+    await sleep(200);
+  }
+  rec('视角开关跑完复位回 3D（不污染后续脚本）',
+    !(app.state && (app.state.flat || app.state.earth)),
+    `flat=${app.state && app.state.flat} earth=${app.state && app.state.earth}`);
+  rec('视角开关跑完关掉自动旋转（相机不再自己漂）',
+    !(app.controls && app.controls.autoRotate));
 
   const layerBtns = $$('#layerGroup button');
   layerBtns.forEach((b) => b.click());

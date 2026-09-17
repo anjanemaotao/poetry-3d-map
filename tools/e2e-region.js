@@ -313,6 +313,7 @@
 
     /* ================= 4. 2D 平面模式 ================= */
     const flatBtn = $('[data-view="flat"]');
+    const earthBtn = $('[data-view="earth"]');
     rec('存在 2D 切换按钮', !!flatBtn);
     const b0 = [...app.effects.beacons.values()][0];
     realClick(flatBtn);
@@ -321,17 +322,47 @@
     rec('切 2D：body 带 flat-mode', document.body.classList.contains('flat-mode'));
     rec('切 2D：光柱已隐藏', b0.column.visible === false);
     rec('切 2D：灯球已隐藏', b0.lantern.visible === false);
-    rec('切 2D：地面光圈仍在（作为平面落点标记）', b0.ring.visible !== false);
+    /* 2D 的落点标记是**小圆点**，不再是放大的地面光圈。
+       光圈是「三维里一盏灯落在地上的光晕」，俯视平面地图上它又大又糊，
+       和旁边的小圆点叠在一起反而像重影 —— 用户要的是「一个小圆点」。 */
+    rec('切 2D：落点小圆点已显示', b0.dot.visible !== false);
+    rec('切 2D：圆点描边已显示（浅色地形上也要看得见）', b0.rim.visible !== false);
+    rec('切 2D：地面光圈已收起（改为小圆点）', b0.ring.visible === false);
     rec('切 2D：锁定旋转', app.controls.enableRotate === false);
     rec('切 2D：相机已在正上方', app.camera.position.y > Math.abs(app.camera.position.x)
       && app.camera.position.y > Math.abs(app.camera.position.z),
       `pos=(${app.camera.position.x.toFixed(1)},${app.camera.position.y.toFixed(1)},${app.camera.position.z.toFixed(1)})`);
 
+    /* ---- 三选一：2D / 3D / 地球 互斥 ----
+       历史 bug：地球模式下点「2D 平面」走的是 setFlatMode(!state.flat)，
+       完全不碰 state.earth —— 于是地球层与版图层同时可见，
+       极角限制与近裁剪面互相打架。这里绕「2D → 地球 → 2D」一圈，逐段验互斥。 */
+    realClick(earthBtn);
+    await sleep(1400);
+    rec('2D 点「地球」→ 已进入地球且退出 2D', app.state.earth === true && app.state.flat === false,
+      `earth=${app.state.earth} flat=${app.state.flat}`);
+    rec('2D 点「地球」→ 地球层可见', app.globe.root.visible === true);
+    rec('2D 点「地球」→ 2D 按钮高亮已摘掉', !flatBtn.classList.contains('on'));
+    rec('2D 点「地球」→ 版图已隐藏（两层不允许同时存在）', app.map.root.visible === false);
+
     realClick(flatBtn);
-    await sleep(900);
+    await sleep(1400);
+    rec('地球点「2D」→ 已回到 2D 且退出地球', app.state.flat === true && app.state.earth === false,
+      `flat=${app.state.flat} earth=${app.state.earth}`);
+    rec('地球点「2D」→ 地球层已隐藏', app.globe.root.visible === false);
+    rec('地球点「2D」→ 地球按钮高亮已摘掉', !earthBtn.classList.contains('on'));
+    rec('地球点「2D」→ 近裁剪面切回地图档（地球档 0.2 会把平面地图整片裁掉）',
+      app.camera.near >= 0.35, `near=${app.camera.near}`);
+
+    realClick(flatBtn);
+    await sleep(1400);
     rec('切回 3D：光柱恢复', b0.column.visible === true);
+    rec('切回 3D：小圆点收起', b0.dot.visible === false);
+    rec('切回 3D：地面光圈恢复', b0.ring.visible === true);
     rec('切回 3D：恢复旋转', app.controls.enableRotate === true);
     rec('切回 3D：body 去掉 flat-mode', !document.body.classList.contains('flat-mode'));
+    rec('切回 3D：两个互斥开关都不高亮',
+      !flatBtn.classList.contains('on') && !earthBtn.classList.contains('on'));
 
     /* ================= 5. 行迹模式只显示行迹上的站点 ================= */
     const total = app.SITES.length;
@@ -394,22 +425,62 @@
           shown: getComputedStyle(b).display !== 'none' && r.width > 1,
           w: Math.round(r.width), h: Math.round(r.height),
           poem: poem, none: none,
+          name: b.querySelector('.rb-name')?.textContent || '?',
+          sideL: b.classList.contains('side-left'),
+          sideR: b.classList.contains('side-right'),
+          sideT: b.classList.contains('side-top'),
+          sideB: b.classList.contains('side-bottom'),
           dotX: Math.round(dot.x + dot.width / 2), dotY: Math.round(dot.y + dot.height / 2),
         };
       });
       rec('每个气泡都只装本人诗作或显式说明「无」',
         items6.every((it) => it.poem || it.none), '漏: ' + items6.filter((it) => !it.poem && !it.none).length);
-      // 锚点圆点应在每个气泡水平范围内的某个合理区间里。
-      // 退路：若气泡离锚点很远（被推到屏幕另一侧），引线会横穿半张地图 —— 那也是错。
-      // 简单判定：dotX 离气泡水平中心 ≤ 自身宽度 + 60px 缓冲。
+      /* 卡片停靠在左右两条空白带里（见 ui.dockRect），引线从卡片**朝锚点那条边**的
+         中点指向锚点。所以「对不齐」的判据不再是「锚点离卡片水平中心近」——
+         那正是旧版把卡片贴在锚点上下时的判据；现在卡片离锚点几十到两百像素是设计。
+         新的四条不变量：
+           a) 每张卡片都带且只带一个方向类（side-left/right/top/bottom）；
+           b) 出线那条边朝向锚点（左栏卡片 → 锚点在右；右栏 → 锚点在左；
+              锚点横向被卡片自己盖住时改用上/下边，此时锚点在卡片正上或正下方）；
+           c) 锚点不被卡片矩形盖住（盖住了就没有任何一条边能连到它）；
+           d) 引线长度在合理区间 —— 否则线会横穿整张地图。 */
       const shownItems = items6.filter((it) => it.shown);
       const shownBoxes = shownItems.map((it) => {
         const r = bs[items6.indexOf(it)].getBoundingClientRect();
-        return { x: r.x, y: r.y, w: r.width, h: r.height, dotX: it.dotX, dotY: it.dotY };
+        return {
+          x: r.x, y: r.y, w: r.width, h: r.height,
+          dotX: it.dotX, dotY: it.dotY,
+          sideL: it.sideL, sideR: it.sideR, sideT: it.sideT, sideB: it.sideB,
+          name: it.name,
+        };
       });
-      const misaligned = shownBoxes.filter((b) => Math.abs(b.dotX - (b.x + b.w / 2)) > b.w / 2 + 60);
-      rec('每个气泡的锚点圆点离卡片水平中心不远', misaligned.length === 0,
-        `${misaligned.length} 个偏离: ` + misaligned.map((b) => `(${b.dotX} vs ${Math.round(b.x + b.w / 2)})`).join(' '));
+      const noSide = shownBoxes.filter((b) => (b.sideL + b.sideR + b.sideT + b.sideB) !== 1);
+      rec('每张卡片都带且只带一个方向类（side-left/right/top/bottom）', noSide.length === 0,
+        `异常 ${noSide.length} 个: ` + noSide.map((b) => b.name).join(' '));
+
+      const badEdge = shownBoxes.filter((b) => {
+        if (b.sideL) return b.dotX <= b.x + b.w;          // 卡片在左 → 锚点必须在它右边
+        if (b.sideR) return b.dotX >= b.x;                // 卡片在右 → 锚点必须在它左边
+        if (b.sideT) return b.dotY >= b.y + b.h / 2;      // 锚点在卡片上方
+        return b.dotY <= b.y + b.h / 2;                   // side-bottom：锚点在下方
+      });
+      rec('出线那条边朝向锚点（方向不会反）', badEdge.length === 0,
+        `异常 ${badEdge.length} 个: `
+        + badEdge.map((b) => `${b.name}(锚点 ${b.dotX},${b.dotY} vs 卡片 ${Math.round(b.x)}~${Math.round(b.x + b.w)} × ${Math.round(b.y)}~${Math.round(b.y + b.h)})`).join(' '));
+
+      const covered = shownBoxes.filter((b) => b.dotX > b.x + 2 && b.dotX < b.x + b.w - 2
+        && b.dotY > b.y + 2 && b.dotY < b.y + b.h - 2);
+      rec('锚点没有被自己的卡片盖住（盖住了引线无从连起）', covered.length === 0,
+        `被盖住 ${covered.length} 个: ` + covered.map((b) => b.name).join(' '));
+
+      const stems = shownBoxes.map((b) => {
+        const sx = b.sideL ? b.x + b.w : b.sideR ? b.x : Math.max(b.x + 8, Math.min(b.x + b.w - 8, b.dotX));
+        const sy = b.sideT ? b.y : b.sideB ? b.y + b.h : b.y + b.h / 2;
+        return { name: b.name, len: Math.hypot(b.dotX - sx, b.dotY - sy) };
+      });
+      const tooLong = stems.filter((s) => s.len > 620);
+      rec('引线长度都在合理区间（≤ 620px，不会横穿整张地图）', tooLong.length === 0,
+        `最长 ${Math.round(Math.max(...stems.map((s) => s.len)))}px，超限 ${tooLong.length} 个`);
       // 互不重叠
       let ov6 = 0;
       for (let i = 0; i < shownBoxes.length; i++) {
