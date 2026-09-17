@@ -535,6 +535,13 @@ poetry-3d-map/
   加一条 `R_TUBE × 1.8` 的深色描边（`0x0a1524`、opacity 0.55）之后亮地形上也读得出线形，
   深色海洋上则靠上层发光取胜 —— 与地图上「江河」的处理是同一个思路。
   底衬的几何要跟着补偿系数**一起重建**，否则拉近时两层粗细会脱节。
+- **视图层显隐不能只跟「user toggle」走**。`applyEarthMode(true)` 把
+  `rivers.visible = false` 藏好了，但 `setViewMode → rebuildRoute → applyVisibility()`
+  又把它无条件拉回 `state.layers.rivers = true`，于是黄河 / 长江 / 京杭大运河
+  按版图坐标系（1 世界单位 ≈ 100km）画的管子直接横在半径 1 的球上，尺寸离谱。
+  修法：所有「A 视图是装饰、B 视图不该出现」的层，visibility 公式都是
+  `user_toggle && view_compatible`（河流：`!state.earth`，云海同理）。
+  这条要在**所有**写 visibility 的入口都加 view-mode 闸门，不能只加在视图切换那一处。
 
 ### 负向验证
 
