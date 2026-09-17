@@ -47,6 +47,46 @@ SITES.forEach((s) => {
 });
 if (coordSeen.size === SITES.length) ok('站点经纬度无重合');
 
+/* ---------- 1b. 坐标精度与间距 ----------
+ * 起因：地图现在可以拉近约 14 倍（默认视域 262km → 最近 19km），
+ * 站点之间的间距第一次变得「看得见」。三条守卫：
+ *   1) 坐标必须落在 0.01° 网格上（≈1.1km），这是这批数据的既定精度。
+ *      注意不能按字面小数位判断：`119.6` 就是 `119.60`，尾零被省略了而已，
+ *      按字面判断会误报 27 处。
+ *      也不去强求 3~4 位：这些诗境多为江、山、关这类**面状**地点而非点，
+ *      再补位数是假精度（已抽查 20 处地标，2 位小数与真实坐标均在 1km 内吻合）。
+ *   2) 必须落在国境经纬度范围内。经纬度写反（lon/lat 互换）在数据层看不出来，
+ *      在三维场景里却是「光柱跑到国外」。
+ *   3) 两站间距 ≥ 1.5km。标记屏幕尺寸恒定，最近处光圈约 45px（≈0.6km），
+ *      再近就会互相盖住。当前最近的一对是金陵↔秦淮（5.8km），余量充足。
+ */
+const onGrid = (n) => Math.abs(n * 100 - Math.round(n * 100)) < 1e-6;
+const distKm = (a, b) => {
+  const dx = (a.lon - b.lon) * Math.cos(((a.lat + b.lat) / 2) * Math.PI / 180) * 111;
+  const dy = (a.lat - b.lat) * 111;
+  return Math.hypot(dx, dy);
+};
+const offGrid = SITES.filter((s) => !onGrid(s.lon) || !onGrid(s.lat));
+if (offGrid.length) {
+  bad(`站点经纬度不在 0.01° 网格上（过粗或过细）：${offGrid.map((s) => `${s.id}(${s.lon},${s.lat})`).join(' ')}`);
+} else {
+  ok(`站点经纬度均落在 0.01° 网格上（≈1.1km，放大后误差 <3px）`);
+}
+
+const outside = SITES.filter((s) => s.lon < 73 || s.lon > 136 || s.lat < 3 || s.lat > 54);
+if (outside.length) bad(`站点落在国境经纬度范围外（lon 73~136 / lat 3~54）：${outside.map((s) => `${s.id}(${s.lon},${s.lat})`).join(' ')}`);
+else ok('站点经纬度均在国境范围内');
+
+let closest = { km: Infinity };
+for (let i = 0; i < SITES.length; i += 1) {
+  for (let j = i + 1; j < SITES.length; j += 1) {
+    const km = distKm(SITES[i], SITES[j]);
+    if (km < closest.km) closest = { km, a: SITES[i], b: SITES[j] };
+  }
+}
+if (closest.km < 1.5) bad(`站点间距过近：${closest.a.id} ↔ ${closest.b.id} 仅 ${closest.km.toFixed(2)}km，放大后标记会互相盖住`);
+else ok(`站点间距下限 ${closest.km.toFixed(1)}km（${closest.a.id} ↔ ${closest.b.id}），放大后仍分得开`);
+
 /* ---------- 2. 诗篇逐条校验 ---------- */
 console.log('[2] 诗篇逐条校验');
 const poemIds = new Set();

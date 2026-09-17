@@ -66,10 +66,31 @@ const MEASURE = `JSON.stringify((() => {
            emptySites: boxes.filter(b => b.none).length };
 })())`;
 
+/**
+ * 等镜头飞完并停稳。
+ *
+ * 原先是固定 `sleep(2600)`（飞行 1.7s + 900ms 余量），实测仍会偶发假失败：
+ * 一旦在飞行途中测量，锚点还在移动，气泡布点就会算出一堆重叠
+ * （实测见过「5 对重叠」和「2 对重叠」各一次，重跑又全绿）。
+ * 轮询到相机位置不再变化为止，比赌一个睡眠时长可靠 —— 与 e2e-layout 里
+ * settle() 的做法一致。
+ */
+const waitSettled = (maxMs = 8000) => {
+  let last = null;
+  for (let t = 0; t < maxMs; t += 120) {
+    const p = ev(`JSON.stringify(window.__app.camera.position.toArray().map(n => +n.toFixed(4)))`);
+    const k = p ? p.join(',') : 'null';
+    if (k === last && k !== 'null') return true;
+    last = k;
+    sleep(120);
+  }
+  return false;
+};
+
 let passed = 0, failed = 0;
 for (const id of routes) {
   ab(['eval', `document.querySelector('#routeList .route-item[data-id="${id}"]').click()`]);
-  sleep(2600);   // 镜头飞 ~1.7s，留落定余量
+  waitSettled();   // 镜头飞 ~1.7s，轮询到停稳再量
   const m = ev(MEASURE);
   const stops = ev(`JSON.stringify(+((document.querySelector('#routeList .route-item[data-id="${id}"] .rc')?.textContent || '').match(/(\\d+)\\s*站/) || [0,0])[1])`);
   if (!m) { console.log(`  ❌ ${id.padEnd(14)} 测量失败`); failed++; continue; }
