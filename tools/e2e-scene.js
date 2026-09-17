@@ -183,5 +183,60 @@
   await sleep(200);
   rec('图层开关可来回切换', true);
 
+  /* ---------- 13. 快捷键说明弹窗 ----------
+   * 底栏「⌨ 快捷键」按钮 + 键盘 ? 都能打开，焦点必须移进去、
+   * Esc / 点遮罩关闭后焦点必须还回去，Tab 要被关在弹窗内。
+   * 内容是脚本里既有的快捷键清单，每加一条新快捷键必须同步改这里
+   * —— 否则说明会变成一张骗人的清单。 */
+  const scBtn = $('#btnShortcuts');
+  rec('快捷键按钮存在', !!scBtn);
+  /* 真实按钮点击会顺便聚焦按钮；合成 .click() 不会。手动 focus 一下，
+     模拟真实用户行为，也让 openShortcuts 保存的 returnFocus 真的是按钮。 */
+  scBtn.focus();
+  scBtn.click(); await sleep(400);
+  rec('点按钮打开弹窗：可见', vis($('#shortcutModal')));
+  rec('点按钮打开弹窗：焦点移进关闭按钮', document.activeElement && document.activeElement.id === 'shortcutModalClose',
+    (document.activeElement || {}).id);
+  rec('弹窗内容：3 个分组（鼠标 / 键盘 / 底栏开关）',
+    $$('#shortcutModal .sc-group').length === 3, String($$('#shortcutModal .sc-group').length));
+  rec('弹窗内容：≥ 12 条快捷键（kbd 数）',
+    $$('#shortcutModal kbd').length >= 12, String($$('#shortcutModal kbd').length));
+  rec('弹窗内容：含本轮新增的 ? 与 Shift + / 提示',
+    /Shift\s*\+\s*\//.test($('#shortcutModal').textContent));
+
+  /* Tab 困在弹窗内：与诗词弹窗一样，开放焦点跑不掉。
+     弹窗里只有一个可聚焦项（关闭按钮），所以「Tab 一次还在弹窗内」+ 「Shift+Tab 同理」
+     就够证 —— 比单按钮陷阱更可靠的是用一前一后两次按键验证焦点仍留在 close-button。 */
+  $$('#shortcutModalMask')[0]?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  await sleep(200);
+  rec('点遮罩关闭弹窗', vis($('#shortcutModal')) === false);
+  rec('点遮罩关闭 → 焦点还回触发按钮', document.activeElement && document.activeElement.id === 'btnShortcuts',
+    (document.activeElement || {}).id);
+
+  /* ? 键开 / 关：直接派发 KeyboardEvent —— agent-browser 没有 key '?' 的合成，
+     且这个 handler 不依赖 :focus-visible 之类的浏览器「输入方式记忆」，纯函数测试足够。
+     先把焦点放回按钮：真实用户在按钮上按 ? 时 activeElement 就是按钮，
+     关闭后焦点应归还到按钮（openShortcuts 在打开那一刻保存了 activeElement）。 */
+  scBtn.focus();
+  document.dispatchEvent(new KeyboardEvent('keydown', { key: '?', code: 'Slash', bubbles: true }));
+  await sleep(200);
+  rec('按 ? 打开弹窗', vis($('#shortcutModal')));
+  document.dispatchEvent(new KeyboardEvent('keydown', { key: '?', code: 'Slash', bubbles: true }));
+  await sleep(200);
+  rec('再按 ? 关闭弹窗', vis($('#shortcutModal')) === false);
+  rec('? 关闭后焦点还回按钮', document.activeElement && document.activeElement.id === 'btnShortcuts',
+    (document.activeElement || {}).id);
+
+  /* Esc 分层：先打开弹窗，再按 Esc 应只关弹窗、不走到下一层（诗词弹窗等）。 */
+  scBtn.focus();
+  scBtn.click(); await sleep(300);
+  document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', bubbles: true }));
+  await sleep(300);
+  rec('Esc 只关快捷键弹窗，不影响其他层（诗词弹窗仍关闭）',
+    vis($('#shortcutModal')) === false && vis($('#poemModal')) === false);
+
+  /* 收尾：快捷键弹窗如果还开着就关掉，免得污染后面的脚本 */
+  if (vis($('#shortcutModal'))) { app.ui.closeShortcuts(); await sleep(150); }
+
   return R;
 })()

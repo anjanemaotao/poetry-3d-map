@@ -278,6 +278,10 @@ document.addEventListener('DOMContentLoaded', function () {
     <button data-quiz="fill" title="补全诗句，四选一" data-page-node-id="i3s3Q7YsZJnmxG3ihwjhHx">补全诗句</button>
     <button data-quiz="feihua" title="飞花令：说出含令字的诗句" data-page-node-id="rGhFOSTl5WtVss0wBF4cvm">飞花令</button>
   </div>
+  <div class="divider"></div>
+  <div class="group">
+    <button id="btnShortcuts" title="查看全部快捷键与鼠标操作（也可以直接按 ? 键）">⌨ 快捷键</button>
+  </div>
 </footer>
 
 <!-- 底部：当前地区的诗词列表（点击地图省份后出现） -->
@@ -296,6 +300,50 @@ document.addEventListener('DOMContentLoaded', function () {
   <div class="modal-card glass" role="dialog" aria-modal="true">
     <button class="icon-btn modal-close" id="poemModalClose" title="关闭（Esc）">✕</button>
     <div class="modal-body" id="poemModalBody"></div>
+  </div>
+</div>
+
+<!-- 快捷键说明弹窗：底栏「快捷键」按钮或键盘 ? 打开。
+     内容与代码里的真实绑定一一对应（改了快捷键必须同步改这里，
+     否则说明会变成一张骗人的清单 —— 快捷键这种东西，说错了比不说更糟）。 -->
+<div id="shortcutModal" class="modal hidden">
+  <div class="modal-mask" id="shortcutModalMask"></div>
+  <div class="modal-card glass" role="dialog" aria-modal="true" aria-labelledby="scTitle">
+    <button class="icon-btn modal-close" id="shortcutModalClose" title="关闭（Esc）">✕</button>
+    <div class="modal-body" id="shortcutModalBody">
+      <div class="d-head">
+        <div class="d-title" id="scTitle">快捷键</div>
+        <div class="d-sub">键盘与鼠标操作一览 · 按 <kbd>Esc</kbd> 或点击遮罩关闭</div>
+      </div>
+
+      <div class="sc-group">
+        <div class="sc-gtitle">鼠标</div>
+        <div class="sc-row"><span class="sc-keys"><kbd>左键拖动</kbd></span><span class="sc-desc">旋转视角（地球模式：任意方向转动地球）</span></div>
+        <div class="sc-row"><span class="sc-keys"><kbd>右键拖动</kbd></span><span class="sc-desc">中国地势图：平移；地球模式：转动地球（地球始终以球心为中心，不做平移）</span></div>
+        <div class="sc-row"><span class="sc-keys"><kbd>滚轮</kbd></span><span class="sc-desc">缩放。标记（光柱 / 圆点 / 序号牌）不随缩放变大，拉近是真拉近</span></div>
+        <div class="sc-row"><span class="sc-keys"><kbd>单击省份</kbd></span><span class="sc-desc">底部列出该地区的全部诗词，右栏显示地区介绍</span></div>
+        <div class="sc-row"><span class="sc-keys"><kbd>单击光柱 / 地名</kbd></span><span class="sc-desc">选中该处诗境，右栏展开详情</span></div>
+      </div>
+
+      <div class="sc-group">
+        <div class="sc-gtitle">键盘</div>
+        <div class="sc-row"><span class="sc-keys"><kbd>空格</kbd></span><span class="sc-desc">播放 / 暂停自动巡游</span></div>
+        <div class="sc-row"><span class="sc-keys"><kbd>Esc</kbd></span><span class="sc-desc">由内向外逐层关闭：诗词弹窗 → 地区列表 → 抽屉 → 练习卡 → 行迹 → 地球模式（一次只收一层）</span></div>
+        <div class="sc-row"><span class="sc-keys"><kbd>R</kbd></span><span class="sc-desc">复位视角（地球模式：回到默认太空视角；2D 平面：回到俯视）</span></div>
+        <div class="sc-row"><span class="sc-keys"><kbd>T</kbd></span><span class="sc-desc">正上方俯视（仅 3D 地势图）</span></div>
+        <div class="sc-row"><span class="sc-keys"><kbd>←</kbd><kbd>→</kbd></span><span class="sc-desc">上一处 / 下一处诗境</span></div>
+        <div class="sc-row"><span class="sc-keys"><kbd>1</kbd><kbd>2</kbd><kbd>3</kbd></span><span class="sc-desc">探索 / 行迹 / 课堂 三种模式</span></div>
+        <div class="sc-row"><span class="sc-keys"><kbd>?</kbd></span><span class="sc-desc">打开 / 关闭本说明（Shift + /）</span></div>
+        <div class="sc-row"><span class="sc-keys"><kbd>Tab</kbd></span><span class="sc-desc">在界面元素间移动焦点；页面第一个可聚焦项是「跳到底部工具条」</span></div>
+      </div>
+
+      <div class="sc-group">
+        <div class="sc-gtitle">底栏开关</div>
+        <div class="sc-row"><span class="sc-keys plain">全域 / 主陆 / 俯视 / 漫游</span><span class="sc-desc">四种预设视角</span></div>
+        <div class="sc-row"><span class="sc-keys plain">2D 平面 / 地球</span><span class="sc-desc">与 3D 地势图三选一，任何时刻只生效一个</span></div>
+        <div class="sc-row"><span class="sc-keys plain">江河 / 地名 / 云海 / 朗读</span><span class="sc-desc">图层与朗读开关。「地名」在地球模式下同样生效 —— 拉近后自动逐处显示</span></div>
+      </div>
+    </div>
   </div>
 </div>
 
