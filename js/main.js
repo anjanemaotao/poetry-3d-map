@@ -1516,7 +1516,16 @@ const placedEarth = [];
 function updateEarthLabels() {
   const layer = document.getElementById('labelLayer');
   const on = state.layers.labels && globe.built && globe.root.visible
-    && camera.position.length() <= EARTH_LABEL_DIST;
+    && camera.position.length() <= EARTH_LABEL_DIST
+    /* 行迹聚焦时整层不标地名。理由不是「地标被隐去了」（那是另一回事，见下），
+       而是**气泡卡片已经承担了地名的职责**：每张卡片头部就是「序号 + 地名 + 年份」，
+       再加一层地名只会互相压住。实测（1440×900，李白行迹 9 站）：
+         3D 版图 —— 地名 7 条 / 气泡 9 张 / 相交 0 对；
+         地球   —— 地名 9 条 / 气泡 9 张 / 相交 6 对，其中 4 条地名被卡片中心盖住。
+       差异来自几何：版图相机在 12.8，站点挤在中央一小块，气泡停在左右空白带里；
+       地球相机在 2.0 上下，站点投影铺满全屏、一直铺进停靠带。
+       让地名让位，比给两层之间加一套互相避让（它们各自每帧独立算，有先后依赖）划算。 */
+    && !globe.routeFocus;
   if (!on) {
     if (layer) layer.style.display = 'none';
     return;
@@ -1529,7 +1538,10 @@ function updateEarthLabels() {
 
   const list = [];
   for (const m of globe.markers) {
-    if (!m.sprite.visible) continue;                 // 行迹聚焦时隐去的站点不标注
+    /* 这里**不要**读 m.sprite.visible。它只表达「这个光点画不画」——
+       行迹聚焦时 setRouteFocus 会把 79 个地标全部收起，照着它过滤等于
+       「选中诗人的瞬间地球上所有地名一起消失」。上面那道闸门才是表达
+       「聚焦时要不要标地名」的地方，几何判断留在这里，两者别混。 */
     const p = m.sprite.position;
     if (p.dot(cam) <= p.lengthSq()) continue;        // 背面：被地球挡住，见 globe.js pickables
     list.push({ m, depth: cam.distanceTo(p) });
@@ -1572,6 +1584,31 @@ function updateEarthLabels() {
   ui.syncLabels(entries);
 }
 
+/* 序号牌贴图里「圆圈外缘半径 ÷ 贴图半宽」。两份 numberTexture 都是 128px 见方的画布，
+   但圆的半径与描边宽度不同：
+     effects.js（地图档）：arc(46) + lineWidth 5 → 外缘 48.5 → 48.5 / 64 = 0.758
+     globe.js（地球档）  ：arc(52) + lineWidth 7 → 外缘 55.5 → 55.5 / 64 = 0.867
+   气泡引线的端点要落在圆圈**边缘**而不是圆心 —— 那枚 7px 的金色圆点（带光晕后
+   视觉直径约 13px）正压在序号数字上会把它糊掉（用户截图：长安站的「5」）。 */
+const BADGE_RING_RATIO = { map: 0.758, earth: 0.867 };
+
+const tmpFwd = new THREE.Vector3();
+
+/**
+ * 序号牌圆圈在屏幕上的半径（px）。
+ *
+ * 序号牌走深度补偿，屏幕尺寸本来就基本恒定，但仍然逐帧算而不是写死像素常数 ——
+ * 以后改了序号牌尺寸 / 取景距离，写死的常数会静默失配，端点又压回数字上，
+ * 而那种退化只能靠肉眼在截图里发现。
+ */
+function badgeRingPx(sprite, ratio) {
+  camera.getWorldDirection(tmpFwd);
+  const d = tmpV.copy(sprite.position).sub(camera.position).dot(tmpFwd);
+  if (!(d > 0.001)) return 0;
+  const texPx = sprite.scale.x / (d * 2 * Math.tan(camera.fov * Math.PI / 360)) * window.innerHeight;
+  return texPx / 2 * ratio;
+}
+
 /**
  * 行迹气泡：把每处行迹地点的三维坐标投影成屏幕坐标，交给 ui 定位。
  *
@@ -1589,15 +1626,38 @@ function updateRouteBubbles() {
   const w = window.innerWidth, h = window.innerHeight;
   const entries = targets.map((t) => {
     let v = null;
+    /* 序号牌圆圈的屏幕半径：引线的端点要从锚点沿引线方向回推这么多，
+       落在圆圈边缘而不是压在数字上（见 BADGE_RING_RATIO）。 */
+    let inset = 0;
+    let badge = null;
     if (state.earth) {
       /* 地球模式下锚点在球面上，必须另算：
          1) 用球面可见性判据（P·C > |P|²）排除背面 —— 引线不该指到球后面去；
-         2) 沿法线再抬一点，让引线落在序号牌上而不是穿进球里。 */
+         2) 沿法线再抬一点，让引线落在序号牌上而不是穿进球里
+            （序号牌建在半径 1.016 处，1.015 正好齐平）。
+
+         ★ 这里**不能**读 m.sprite.visible 当闸门。
+         地标 sprite 在行迹聚焦时会被 globe.setRouteFocus 整批收起（理由见那边：
+         加色白晕比序号牌还大一圈，会透上来把数字洗白），而「收起」表达的是
+         「这个光点不画」，**不是**「这个站点不存在」—— 两件事共用了一个字段，
+         语义被撑坏了。
+
+         早先这里借它当闸门是**巧合成立**的：那时 setRouteFocus 只隐藏「非行迹」
+         站点，于是 sprite.visible === true 恰好等价于「该站点属于本行迹」。
+         改成全部收起之后这个等价关系就断了 —— 9 个气泡全被判不可见，
+         地球模式下行迹的诗词卡片整批消失，而 2D / 3D 好好的
+         （那两边读的是 beacon.visible，与地标 sprite 无关）。
+         实测：earth 下 kids=9 / shown=0，而 front 与 hasMarker 全是 true。
+
+         气泡该不该出现，bubbleTargets() 自己就回答了：它只包含当前行迹的站点。
+         这里只需要回答「它在球正面吗」。 */
       const m = globe.markerOf(t.siteId);
-      if (!m || !m.sprite.visible) return { x: 0, y: 0, visible: false };
+      if (!m) return { x: 0, y: 0, visible: false };
       const p = m.sprite.position;
       if (p.dot(camera.position) <= p.lengthSq()) return { x: 0, y: 0, visible: false };
       v = p.clone().multiplyScalar(1.015);
+      const eb = globe.routeBadges.find((x) => x.siteId === t.siteId);
+      if (eb) { inset = badgeRingPx(eb.sprite, BADGE_RING_RATIO.earth); badge = eb.sprite; }
     } else {
       const b = effects.beacons.get(t.siteId);
       if (!b || !b.visible) return { x: 0, y: 0, visible: false };
@@ -1611,14 +1671,26 @@ function updateRouteBubbles() {
       const comp = b.group.scale.y || 1;
       v = b.group.position.clone();
       v.y += (state.flat ? 0.30 : 2.36) * comp;
+      const mb = effects.routeBadges.find((x) => x.siteId === t.siteId);
+      if (mb) { inset = badgeRingPx(mb.sprite, BADGE_RING_RATIO.map); badge = mb.sprite; }
     }
     const p = v.project(camera);
     const onScreen = p.z < 1 && p.x > -1.05 && p.x < 1.05 && p.y > -1.05 && p.y < 1.05;
-    return {
-      x: (p.x * 0.5 + 0.5) * w,
-      y: (-p.y * 0.5 + 0.5) * h,
-      visible: onScreen,
-    };
+    const ax = (p.x * 0.5 + 0.5) * w;
+    const ay = (-p.y * 0.5 + 0.5) * h;
+
+    /* 锚点**不一定落在序号牌圆心上** —— 3D 下它取的是「牌中心 + 0.31·comp」（约 10px
+       偏高），2D 下也高 0.18·comp。所以只回推一个半径还不够：端点会停在圆内偏上，
+       仍然压着数字（实测 3D 的扬州站端点距圆心只有 3px，而圆圈半径 25px）。
+       这里把「圆心相对锚点的屏幕偏移」也算出来交给 ui，让它按引线方向扣掉。 */
+    let offX = 0;
+    let offY = 0;
+    if (badge) {
+      const q = badge.position.clone().project(camera);
+      offX = (q.x * 0.5 + 0.5) * w - ax;
+      offY = (-q.y * 0.5 + 0.5) * h - ay;
+    }
+    return { x: ax, y: ay, visible: onScreen, inset, offX, offY };
   });
   ui.updateRouteBubbles(entries);
 }

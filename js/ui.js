@@ -1468,7 +1468,11 @@ export class UI {
       if (!e || !e.visible) { el.style.display = 'none'; return; }
       el.style.display = '';
       const size = this._bubbleSizes.get(st.key) || { w: 184, h: 58 };
-      items.push({ ...st, el, ax: e.x, ay: e.y, w: size.w, h: size.h });
+      /* inset 必须跟着一起带下来 —— 它决定端点回推多远（见 place()）。
+         漏掉它的话回推量恒为 0，端点又落回序号牌圆心、把数字压住，
+         而其余一切正常（卡片、引线方向、防重叠都对），只有量端点距离才看得出来。 */
+      items.push({ ...st, el, ax: e.x, ay: e.y, w: size.w, h: size.h,
+        inset: e.inset || 0, offX: e.offX || 0, offY: e.offY || 0 });
     });
     if (!items.length) return;
 
@@ -1528,8 +1532,33 @@ export class UI {
         stemX = Math.max(8, Math.min(w - 8, Math.round(dotX)));
         stemY = edge === 'top' ? 0 : h;
       }
-      const len = Math.hypot(dotX - stemX, dotY - stemY);
+      const span = Math.hypot(dotX - stemX, dotY - stemY);
       const deg = Math.atan2(dotY - stemY, dotX - stemX) * 180 / Math.PI - 90;
+
+      /* 端点（米色小圆点）不能落在序号牌**圆心**上 —— 那枚 7px 的圆点带光晕后
+         视觉直径约 13px，正压在序号数字上就把它糊掉了（用户截图：长安站的「5」）。
+         沿引线方向退回 t，使端点正好落在圆圈边缘：
+             |−u·t − off| = R   →   t = −(u·off) + √((u·off)² + R² − |off|²)
+         其中 u 是从卡片尖端指向锚点的单位向量，R 是圆圈屏幕半径（main.js 逐帧算），
+         off 是**圆心相对锚点的屏幕偏移** —— 锚点并不落在圆心上（3D 下它取的是
+         「牌中心 + 0.31·comp」，约 10px 偏高），只回推一个 R 的话端点会停在圆内偏上，
+         仍然压着数字（实测 3D 的扬州站端点距圆心只有 3px，而圆圈半径 25px）。
+         引线也要跟着缩短同样的量，否则它会穿进圆圈、在数字上留一条金线。 */
+      const ux = span > 0 ? (dotX - stemX) / span : 0;
+      const uy = span > 0 ? (dotY - stemY) / span : 0;
+      const R = it.inset || 0;
+      const offX = it.offX || 0;
+      const offY = it.offY || 0;
+      const proj = ux * offX + uy * offY;
+      const disc = proj * proj + R * R - (offX * offX + offY * offY);
+      let t = R - proj;
+      if (disc > 0) t = -proj + Math.sqrt(disc);
+      /* 下限留 4px：卡片贴得极近时别把引线缩没了 ——
+         那种情况下卡片本身已经压在序号牌上，端点在哪都无所谓了。 */
+      const inset = Math.min(Math.max(0, t), Math.max(0, span - 4));
+      const len = span - inset;
+      const endX = dotX - ux * inset;
+      const endY = dotY - uy * inset;
 
       el.style.setProperty('--tail-x', `${Math.round(stemX)}px`);
       el.style.setProperty('--tail-y', `${Math.round(stemY)}px`);
@@ -1537,8 +1566,8 @@ export class UI {
       el.style.setProperty('--stem-y', `${Math.round(stemY)}px`);
       el.style.setProperty('--stem-h', `${Math.round(len)}px`);
       el.style.setProperty('--stem-r', `${deg.toFixed(1)}deg`);
-      el.style.setProperty('--dot-x', `${Math.round(dotX)}px`);
-      el.style.setProperty('--dot-y', `${Math.round(dotY)}px`);
+      el.style.setProperty('--dot-x', `${Math.round(endX)}px`);
+      el.style.setProperty('--dot-y', `${Math.round(endY)}px`);
     };
 
     groups.forEach(({ side, list }) => {

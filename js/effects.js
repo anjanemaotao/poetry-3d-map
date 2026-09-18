@@ -499,7 +499,10 @@ export class Effects {
       group.add(sprite);
       // 序号牌锚在站点上，所以用它所属站点的补偿基准，尺寸与该站光柱一致。
       this.routeBadges.push({
-        sprite, pos: s.site.group.position.clone(), refDepth: s.site.refDepth, lift, base: badgeSize,
+        /* 站点 id 在 stops 元素上叫 siteId —— `site` 那个字段装的是 beacon 对象
+           （见 buildRoute 开头的 map），写 `s.site.id` 会静默得到 undefined，
+           气泡那边按 id 找序号牌就永远找不到，端点回推量恒为 0。 */
+        sprite, siteId: s.siteId, pos: s.site.group.position.clone(), refDepth: s.site.refDepth, lift, base: badgeSize,
       });
     });
 

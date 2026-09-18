@@ -806,6 +806,12 @@ export class Globe {
    * 大一圈 —— 透出来的那层光会把整块序号牌洗白（泛光再放大一次，肉眼就是「数字糊了」）。
    * 把地标收掉，序号牌就干净地立在那个位置上；点选仍然可用，因为序号牌自己也在拾取表里
    * （见 pickables）。这与版图那边「2D 下序号牌取代落点圆点」是同一条原则。
+   *
+   * ★ sprite.visible 只表达「这个光点画不画」，**不代表站点是否存在**。
+   * 需要判断「哪些站点属于当前行迹」的地方请读 this.routeFocus，不要读它 ——
+   * 曾经 main.js 有两处（地球气泡、地球地名标注）借它当闸门，只因为当时
+   * 「只隐藏非行迹站点」让 sprite.visible === true 恰好等价于「属于本行迹」。
+   * 改成全部收起之后这个巧合断了：地球模式下行迹的诗词卡片整批消失。
    */
   setRouteFocus(set) {
     this.routeFocus = set || null;
@@ -888,12 +894,16 @@ export class Globe {
    * three.js 的射线检测不做遮挡判断 —— 只把精灵丢进去的话，地球背面那些
    * 被球体挡住的地标照样会被打中，表现为「点空白处却选中了一处看不见的诗境」。
    * 球面可见性判据：表面点 P 对相机 C 可见 ⇔ P·C > |P|²。
+   *
+   * `!m.sprite.visible` 这条闸门过滤掉的是**画面上不存在的对象**，与
+   * 「哪些站点属于本行迹」无关 —— 行迹聚焦时地标被整批收起，所以一律不参与拾取；
+   * 那些站点仍能点中，走的是下面的序号牌（序号牌就建在站点正上方，几乎重合）。
    */
   pickables(camera) {
     const c = camera.position;
     const out = [];
     for (const m of this.markers) {
-      if (!m.sprite.visible) continue;          // 行迹聚焦时隐去的站点不该还能被点中
+      if (!m.sprite.visible) continue;          // 没画出来的东西不该能被点中
       const p = m.sprite.position;
       if (p.dot(c) > p.lengthSq()) out.push(m.sprite);
     }
