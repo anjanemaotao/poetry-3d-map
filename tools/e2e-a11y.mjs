@@ -306,7 +306,7 @@ console.log('[6] 列表项可访问名');
   // 行迹列表要先进入行迹模式才渲染
   evalValue(`document.querySelector('[data-mode="route"]').click()`);
   ab(['wait', '900']);
-  const routeName = String(evalValue(`(document.querySelector('#routeList .route-item') || {}).getAttribute ? document.querySelector('#routeList .route-item').getAttribute('aria-label') : ''`));
+  const routeName = String(evalValue(`(document.querySelector('#routePoetMenu .route-item') || {}).getAttribute ? document.querySelector('#routePoetMenu .route-item').getAttribute('aria-label') : ''`));
   rec('行迹列表项有 aria-label', routeName.length > 0 && /行迹 \d+ 站/.test(routeName), routeName);
 
   // 「气泡」开关按钮：键盘可达 + 有可访问名 + 能被 Enter/Space 触发

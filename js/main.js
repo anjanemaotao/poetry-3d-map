@@ -1326,12 +1326,18 @@ function bindBars() {
   document.getElementById('btnTour').onclick = () => {
     tour.playing ? stopTour() : startTour();
   };
-  document.getElementById('tourScope').onchange = (e) => {
-    tour.scope = e.target.value;
-    tour.list = scopeList(tour.scope);
-    ui.toast(`巡游范围：${e.target.selectedOptions[0].textContent}（${tour.list.length} 处）`);
-    if (tour.playing) { stopTour(); startTour(); }
-  };
+  /* 巡游范围用 ui.bindDropdown 统一接管（见 ui.js）：原生 <select> 在窄屏由 OS
+     接管弹层，位置飘移 + 文字看不清 + 风格与暗色主题脱节，这里传给 ui
+     一个 onChange 钩子做实际的「重算 tour.list / 重启巡游」副作用。 */
+  ui.bindDropdown('#tourScopeDD', {
+    onChange: (value, label) => {
+      tour.scope = value;
+      tour.list = scopeList(tour.scope);
+      ui.toast(`巡游范围：${label}（${tour.list.length} 处）`);
+      if (tour.playing) { stopTour(); startTour(); }
+    },
+    initial: { value: tour.scope },
+  });
 
   document.getElementById('btnShortcuts').onclick = () => ui.toggleShortcuts();
 }

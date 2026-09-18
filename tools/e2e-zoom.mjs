@@ -10,14 +10,14 @@
  *   node tools/e2e-zoom.mjs
  * 前置：本地静态服务器已启动（serve.py），agent-browser 已安装。
  */
-import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { makeAb, runScript } from './ab-run.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const TARGET = process.env.E2E_URL || 'http://127.0.0.1:8777/index.html';
-const ab = (args) => execFileSync('agent-browser', args, { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+const ab = makeAb();
 
 function evalValue(js) {
   const out = ab(['eval', js]).trim();
@@ -47,14 +47,12 @@ function freshPage() {
 
 freshPage();
 
-const out = ab(['eval', fs.readFileSync(path.join(HERE, 'e2e-zoom.js'), 'utf8')]);
-const a = out.indexOf('[');
-const b = out.lastIndexOf(']');
-if (a < 0 || b < a) {
-  console.error('✗ 输出里找不到 JSON 数组：\n' + out.slice(0, 800));
-  process.exit(1);
-}
-const R = JSON.parse(out.slice(a, b + 1));
+/* 走 runScript（派发 + 轮询）而不是把整个脚本塞进一次 eval ——
+   单次 eval 有等待上限，脚本一长就报成 `os error 35 … daemon may be busy`，
+   看着像环境坏了。详见 ab-run.mjs 顶部注释。 */
+const R = runScript(ab, fs.readFileSync(path.join(HERE, 'e2e-zoom.js'), 'utf8'), {
+  label: 'e2e-zoom.js',
+}).R;
 
 R.forEach((x) => console.log(`${x.pass ? '✓' : '✗'} ${x.name}${x.extra ? '  —— ' + x.extra : ''}`));
 const pass = R.filter((x) => x.pass).length;

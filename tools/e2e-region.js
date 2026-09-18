@@ -373,7 +373,7 @@
     await sleep(400);
     rec('切到行迹模式后行迹面板可见', shown('#routePanel'));
 
-    const items = [...document.querySelectorAll('#routeList .route-item')];
+    const items = [...document.querySelectorAll('#routePoetMenu .route-item')];
     rec('行迹列表有内容', items.length > 0, `${items.length} 条`);
 
     if (items.length) {
@@ -390,15 +390,41 @@
       rec('左侧列表也同步只剩行迹站点', visRows === stops || visRows === 0,
         `列表 ${visRows} / 行迹 ${stops}`);
 
+      /* 负向：**宽屏不该自动收起行迹面板**。
+         「选完诗人自动收起」是窄屏专属的补救（那里面板占 87% 屏宽，地图只剩 50px）；
+         宽屏两栏并排、地图仍占中间空白区，收起反而把详情藏起来了。
+         这条同时守住「isNarrow() 判断没写反」—— 写反了窄屏那条会过、这条必挂。
+         本套跑在 1440×900，所以这里断言的是**不收起**。 */
+      rec('宽屏选完诗人 → 行迹面板不收起（自动收起只属于窄屏）',
+        !document.body.classList.contains('hide-route')
+        && $('#routePanel').getBoundingClientRect().left >= 0,
+        `hide-route=${document.body.classList.contains('hide-route')} ` +
+        `x=${Math.round($('#routePanel').getBoundingClientRect().left)} ` +
+        `narrow=${document.body.classList.contains('narrow')}`);
+      /* 面板没收起，行迹开关就该贴在外缘且看得见（宽屏也留一个手动收起的入口）。 */
+      rec('宽屏行迹模式下 → 行迹开关可见且贴在面板外缘',
+        shown('#toggleRoute')
+        && $('#toggleRoute').getBoundingClientRect().left
+           >= $('#routePanel').getBoundingClientRect().right - 2,
+        `开关 x=${Math.round($('#toggleRoute').getBoundingClientRect().left)} / ` +
+        `面板 right=${Math.round($('#routePanel').getBoundingClientRect().right)}`);
+
       // 行迹聚焦收窄了可见诗境，右栏若还在展示地区介绍就必须跟着收窄，
       // 不能「地图只剩 1 根光柱、右栏却列 4 处诗境」。
+      /* `dataset.region` 读出来**永远是字符串**，而 `PROVINCE_SITES` 的键是
+         `provinceAt()` 给的**数字** adcode —— 直接 `get(rcCode)` 恒为 undefined，
+         这一句以前会抛错把整段脚本打断（或者更糟：被人用 try 吞掉后永远不执行，
+         于是这条断言其实是死的）。两种键都试一次。 */
       const rcCode = $('#detailBody').dataset.region;
-      if (rcCode) {
+      const rcEntry = rcCode
+        ? (app.PROVINCE_SITES.get(Number(rcCode)) || app.PROVINCE_SITES.get(rcCode))
+        : null;
+      if (rcEntry) {
         const rItems = document.querySelectorAll('#detailBody .notes-box .note-item').length;
-        const rVis = app.PROVINCE_SITES.get(rcCode).sites
+        const rVis = rcEntry.sites
           .filter((s) => { const b = app.effects.beacons.get(s.id); return b && b.visible; }).length;
         rec('行迹聚焦 → 右栏地区介绍同步收窄到可见诗境', rItems === rVis,
-          `右栏 ${rItems} / 可见 ${rVis}`);
+          `右栏 ${rItems} / 可见 ${rVis}（region=${rcCode}）`);
       }
 
       /* ================= 6. 行迹气泡卡片 ================= */
@@ -494,7 +520,7 @@
       rec('气泡之间互不重叠', ov6 === 0, `${ov6} 对重叠`);
 
       // 切换诗人 → 气泡按新诗人的作品刷新（站点名应当与新行迹一致）
-      const items7 = [...document.querySelectorAll('#routeList .route-item')];
+      const items7 = [...document.querySelectorAll('#routePoetMenu .route-item')];
       if (items7.length >= 2) {
         realClick(items7[1]);
         await sleep(2400);
@@ -662,6 +688,46 @@
         `${line.material.opacity.toFixed(3)} / ${baseOpacity}`);
       rec('收起诗词条 → 地形落回', target.userData.lift < 0.05,
         `lift=${target.userData.lift.toFixed(3)}`);
+    }
+
+    /* ================= 9. 2D + 行迹：序号牌取代落点圆点 =================
+       序号牌与落点圆点锚在**同一个坐标**上，而序号牌的圆底是半透明的（0.94）、
+       落点圆点是纯色实心圆盘 —— 圆点会从圆底里透上来，在数字正中糊出一块亮斑
+       （实测长安那一站的「2」下半截就被糊掉了，用户报的正是「序号看不清」）。
+       所以 2D 下被行迹覆盖的站点不画圆点：序号牌本身就是那个站点的标记。 */
+    $('[data-mode="route"]').click();
+    await sleep(600);
+    const items9 = [...document.querySelectorAll('#routePoetMenu .route-item')];
+    if (items9.length) {
+      realClick(items9[0]);
+      await sleep(1800);
+      realClick($('[data-view="flat"]'));
+      await sleep(1600);
+
+      const stations = [...app.effects.routeStationIds]
+        .map((id) => app.effects.beacons.get(id)).filter(Boolean);
+      rec('2D + 行迹：行迹站点集合非空（前置）', stations.length > 0, `${stations.length} 站`);
+      rec('2D + 行迹：被行迹覆盖的站点不画落点圆点（序号牌即落点标记）',
+        stations.length > 0 && stations.every((b) => b.dot.visible === false && b.rim.visible === false),
+        `${stations.filter((b) => b.dot.visible).length} / ${stations.length} 仍画着圆点`);
+
+      /* 负向验证：没被行迹覆盖的站点圆点必须还在 ——
+         否则上面那条可能是「2D 下圆点一律不显示」的恒真断言。 */
+      const outsider = [...app.effects.beacons.entries()]
+        .find(([id]) => !app.effects.routeStationIds.has(id));
+      rec('2D + 行迹：未覆盖的站点圆点仍在（不是「一律不画」）',
+        !!outsider && outsider[1].dot.visible === true,
+        outsider ? `${outsider[0]} dot.visible=${outsider[1].dot.visible}` : '无对照站点');
+
+      /* 负向验证 2：退出行迹，被让位的圆点要回来 */
+      realClick($('#routeClose'));
+      await sleep(1400);
+      rec('退出行迹 → 2D 下落点圆点全部回来',
+        stations.length > 0 && stations.every((b) => b.dot.visible === true),
+        `${stations.filter((b) => b.dot.visible).length} / ${stations.length}`);
+
+      realClick($('[data-view="flat"]'));
+      await sleep(1200);
     }
 
     return R;

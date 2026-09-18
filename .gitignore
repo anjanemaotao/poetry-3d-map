@@ -3,3 +3,6 @@
 .server.log
 __pycache__/
 *.pyc
+
+# 智能体工作记忆（本地保留，不进仓库）
+.workbuddy-ai/

@@ -19,10 +19,10 @@
  *   E2E_URL=... node tools/e2e-layout.mjs
  * 前置：本地静态服务器已启动（serve.py），agent-browser 已安装。
  */
-import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { makeAb, runScript } from './ab-run.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const TARGET = process.env.E2E_URL || 'http://127.0.0.1:8777/index.html';
@@ -39,8 +39,7 @@ const VIEWPORTS = [
   [1440, 900],
 ];
 
-const ab = (args) =>
-  execFileSync('agent-browser', args, { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+const ab = makeAb();
 
 const script = fs.readFileSync(path.join(HERE, 'e2e-layout.js'), 'utf8');
 
@@ -53,17 +52,15 @@ for (const [w, h] of VIEWPORTS) {
   ab(['reload']);
   ab(['wait', '3400']);
 
-  let out;
+  let res;
   try {
-    out = ab(['eval', script]);
+    /* 8 个视口 × 每个视口一套完整布局断言，单次 eval 必超时 —— 走 runScript。 */
+    res = runScript(ab, script, { label: `e2e-layout.js @${w}x${h}` }).R;
   } catch (e) {
     results.push({ vp: `${w}x${h}`, bad: [`脚本执行失败：${e.message.split('\n')[0]}`] });
     console.log(`✗ ${`${w}x${h}`.padEnd(10)} 执行失败`);
     continue;
   }
-  const a = out.indexOf('{');
-  const b = out.lastIndexOf('}');
-  const res = JSON.parse(out.slice(a, b + 1));
   results.push(res);
   const ok = res.bad.length === 1 && res.bad[0].startsWith('(');
   console.log(`${ok ? '✓' : '✗'} ${`${w}x${h}`.padEnd(10)} ${res.bad.join(' | ')}`);

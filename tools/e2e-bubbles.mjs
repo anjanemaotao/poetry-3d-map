@@ -47,7 +47,7 @@ if (!booted) throw new Error(`页面打不开：${TARGET}`);
 ab(['eval', `document.querySelector('[data-mode="route"]').click()`]);
 ab(['wait', '1200']);
 
-const routes = ev(`JSON.stringify([...document.querySelectorAll('#routeList .route-item')].map(e => e.dataset.id))`);
+const routes = ev(`JSON.stringify([...document.querySelectorAll('#routePoetMenu .route-item')].map(e => e.dataset.id))`);
 console.log(`→ 共 ${routes.length} 条行迹\n`);
 
 const MEASURE = `JSON.stringify((() => {
@@ -109,10 +109,10 @@ const waitSettled = (maxMs = 8000) => {
 
 let passed = 0, failed = 0;
 for (const id of routes) {
-  ab(['eval', `document.querySelector('#routeList .route-item[data-id="${id}"]').click()`]);
+  ab(['eval', `document.querySelector('#routePoetMenu .route-item[data-id="${id}"]').click()`]);
   waitSettled();   // 镜头飞 ~1.7s，轮询到停稳再量
   const m = ev(MEASURE);
-  const stops = ev(`JSON.stringify(+((document.querySelector('#routeList .route-item[data-id="${id}"] .rc')?.textContent || '').match(/(\\d+)\\s*站/) || [0,0])[1])`);
+  const stops = ev(`JSON.stringify(+((document.querySelector('#routePoetMenu .route-item[data-id="${id}"] .rc')?.textContent || '').match(/(\\d+)\\s*站/) || [0,0])[1])`);
   if (!m) { console.log(`  ❌ ${id.padEnd(14)} 测量失败`); failed++; continue; }
   const checks = [
     ['数=站', m.n === stops],
@@ -139,7 +139,7 @@ console.log(`\n→ 气泡开关`);
 // sweep 循环结束时停在 routes 数组最后一项（DOM 顺序最后，liqingzhao 3 站），
 // 不是第一项 libai —— n 不该硬编码 9。从 routes 数组直接拿最后一项的站数。
 const lastRouteId = routes[routes.length - 1];
-const lastRouteN = +ev(`JSON.stringify(+(((document.querySelector('#routeList .route-item[data-id=\\\"${lastRouteId}\\\"] .rc')||{}).textContent || '').match(/(\\d+)/) || [,'?'])[1])`);
+const lastRouteN = +ev(`JSON.stringify(+(((document.querySelector('#routePoetMenu .route-item[data-id=\\\"${lastRouteId}\\\"] .rc')||{}).textContent || '').match(/(\\d+)/) || [,'?'])[1])`);
 
 const layerDisplay = () => ev(`getComputedStyle(document.querySelector('#bubbleLayer')).display`);   // 直接返回字符串
 const layerHasHiddenClass = () => ev(`document.querySelector('#bubbleLayer').classList.contains('bubble-hidden')`);
@@ -176,7 +176,7 @@ console.log(`  ${onPressed === true ? '✅' : '❌'} aria-pressed=true (实际=$
 // 切到另一位诗人 → 按钮偏好保留（用户 choice 不被覆盖）
 ab(['eval', `document.querySelector('#bubbleToggle').click()`]);   // 再关
 sleep(300);
-ab(['eval', `document.querySelector('#routeList .route-item[data-id="xinqiji"]').click()`]);
+ab(['eval', `document.querySelector('#routePoetMenu .route-item[data-id="xinqiji"]').click()`]);
 sleep(2600);
 const afterSwitchDisplay = layerDisplay();
 const afterSwitchN = totalBubbles();

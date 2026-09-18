@@ -26,6 +26,7 @@ export class UI {
     this._bubbleSizes = new Map();   // 气泡键 -> {w,h}，量一次缓存，别每帧读 offsetHeight
     this.bubbleVisible = true;       // 「气泡」开关状态：行迹面板里的按钮控制
     this._dock = null;               // 气泡停靠区缓存，见 invalidateDock / dockRect
+    this._dropdowns = [];            // 所有「按钮 + 浮层」下拉的句柄，见 bindDropdown
   }
 
   /* ================= 初始化 ================= */
@@ -37,6 +38,11 @@ export class UI {
     this.bindModes();
     this.bindQuiz();
     this.bindRoutes();
+    /* 诗人下拉：bindRoutes 已经把 16 位诗人塞进 #routePoetMenu，
+       这里挂按钮 / 浮层 / 外部点击 / Esc —— 选项点击的副作用
+       （toggle .on + renderRouteDetail + onBuildRoute）由 bindRoutes 的 onclick 自己处理，
+       bindDropdown 只负责关浮层与同步按钮 label。 */
+    this.bindDropdown('#routePoetDD', { labelFrom: '.rn' });
     this.bindRegionBar();
     this.bindBubbleToggle();
     this.updateStatStrip();
@@ -299,6 +305,15 @@ export class UI {
         this.setPanelHidden(key, hidden);
       };
     });
+    /* 行迹面板的开关。它不参与左右两栏那套「窄屏互斥」—— 行迹面板出现时
+       #leftPanel 已经是 display:none，不存在两个抽屉同时铺在屏幕上的问题。 */
+    const rb = $('#toggleRoute');
+    if (rb) {
+      rb.onclick = () => {
+        const hidden = !document.body.classList.contains('hide-route');
+        this.setRoutePanelHidden(hidden);
+      };
+    }
 
     window.addEventListener('resize', () => {
       this.applyNarrowMode();
@@ -353,11 +368,50 @@ export class UI {
     }
   }
 
+  /**
+   * 收起 / 展开行迹面板（#routePanel）。
+   *
+   * 为什么不复用 setPanelHidden：那一套的 key 只有 left / right，而且它靠
+   * `body.hide-left` 表达状态、`#leftPanel` / `#rightPanel` 两个固定元素承载。
+   * 行迹面板是第三个独立元素，硬塞进去会让 `hideClass()` 变成三分支、还要给
+   * `syncPanelToggles` 里那串 `key === 'left' ? ... : ...` 再补一条 ——
+   * 与其把一个两态函数改成三态，不如单开一个，语义更清楚。
+   *
+   * **不能用 `.hidden`**：`isRouteMode()` 就是靠 `#routePanel 有没有 hidden 类`
+   * 判断的，加 `.hidden` 会被当成「退出了行迹模式」，紧接着 Esc、模式按钮高亮、
+   * 气泡清理全都跟着错乱。所以这里走 `.collapsed` + `body.hide-route`，
+   * 与左右两栏一致：只影响绘制与位置，状态原封不动。
+   */
+  setRoutePanelHidden(hidden, opts = {}) {
+    document.body.classList.toggle('hide-route', hidden);
+    const panel = $('#routePanel');
+    if (panel) {
+      panel.classList.toggle('collapsed', hidden);
+      /* 收起的面板靠 transform 移出屏幕，但它在无障碍树里仍然「在」——
+         读屏软件会念出屏幕外那一整份行迹详情。与 setPanelHidden 同样处理。 */
+      panel.setAttribute('aria-hidden', hidden ? 'true' : 'false');
+    }
+    const btn = $('#toggleRoute');
+    if (btn) {
+      btn.setAttribute('aria-expanded', hidden ? 'false' : 'true');
+      btn.querySelector('.pt-arrow').textContent = hidden ? '›' : '‹';
+    }
+    if (!opts.quiet) {
+      this.syncPanelToggles();
+      this.syncScrim();
+      this.invalidateDock();
+    }
+  }
+
   /** 遮罩只在「窄屏 + 确有抽屉打开」时出现。
    * 宽屏下两栏是并排的常驻工具、地图仍在中间空白区里，不需要一层遮罩。 */
   syncScrim() {
     const el = $('#drawerScrim');
     if (!el) return;
+    /* 行迹面板不算在内：它只在行迹模式下存在，而那个模式下 #leftPanel 已经是
+       display:none、左右两栏的 hide-x 类都是「收起」。把行迹面板也计进来会
+       让窄屏一进行迹模式就多出一层遮罩，属于「顺手改了没被要求的东西」——
+       行迹面板自己的收起入口是 #toggleRoute（见 setRoutePanelHidden）。 */
     const anyOpen = !document.body.classList.contains('hide-left')
       || !document.body.classList.contains('hide-right');
     el.classList.toggle('hidden', !(this.isNarrow() && anyOpen));
@@ -373,6 +427,13 @@ export class UI {
         closed = true;
       }
     });
+    /* 行迹面板也是窄屏下铺在屏幕上的一块，Esc 该能收起它 ——
+       但它是「退出行迹模式」之外的另一种收法，所以不能走 exitRouteMode：
+       那样会连诗人选择、气泡、地图聚焦一起清掉，用户按一次 Esc 就丢了整条行迹。 */
+    if (this.isRouteMode() && !document.body.classList.contains('hide-route')) {
+      this.setRoutePanelHidden(true);
+      closed = true;
+    }
     return closed;
   }
 
@@ -397,6 +458,9 @@ export class UI {
          得自己想到「去点那两个小箭头」才能把界面找回来。 */
       this.setPanelHidden('left', false, { quiet: true });
       this.setPanelHidden('right', false, { quiet: true });
+      /* 行迹面板同理。窄屏下它可能正收着（选完诗人自动收的），
+         拉到宽屏后该自己回来 —— 宽屏有地方并排放下，没有理由还藏着。 */
+      this.setRoutePanelHidden(false, { quiet: true });
     }
     this.syncScrim();
   }
@@ -418,6 +482,27 @@ export class UI {
     // 行迹模式下左栏被整体隐藏（display:none），开关也要跟着藏
     const lGone = this.panels.left.style.display === 'none';
     lb.style.display = lGone ? 'none' : '';
+
+    /* 行迹开关：只在行迹模式下出现。
+       此时 #toggleLeft 恰好被上面那句藏掉了，两者永远不同时出现，不会叠在一起。
+       位置按 #routePanel 的实际宽度算 —— 它比左右两栏窄，各断点宽度也不一样，
+       写死一个 left 值一定会在某个断点错位。 */
+    const rtb = $('#toggleRoute');
+    const rp = $('#routePanel');
+    if (rtb && rp) {
+      const inRoute = this.isRouteMode();
+      /* 必须写 'flex' 而不是 ''。CSS 里 `#toggleRoute { display: none }` 是默认值，
+         而 `style.display = ''` 的语义是「删掉内联声明」，删完 CSS 那条又生效 ——
+         结果就是「明明进了行迹模式，开关却始终看不见」。
+         （#toggleLeft 那句写 '' 是安全的：它没有 CSS 默认值，靠 .panel-toggle 的 flex 兜底。） */
+      rtb.style.display = inRoute ? 'flex' : 'none';
+      if (inRoute) {
+        const rHide = document.body.classList.contains('hide-route');
+        rtb.style.left = rHide ? '0px' : `${GAP + rp.offsetWidth - 1}px`;
+        rtb.setAttribute('aria-expanded', rHide ? 'false' : 'true');
+        rtb.querySelector('.pt-arrow').textContent = rHide ? '›' : '‹';
+      }
+    }
     // 开关位置变了 → 气泡停靠带跟着变
     this.invalidateDock();
   }
@@ -460,6 +545,13 @@ export class UI {
         document.getElementById('leftPanel').style.display = isRoute ? 'none' : '';
         if (mode === 'route') this.toast('选择一位诗人，地图将只保留他的行迹站点');
         if (mode === 'class') this.toast('选择底部的练习开始上课');
+        // 面板收起来了，挂在 body 上的诗人下拉浮层不能留在半空
+        if (!isRoute) this.closeDropdowns();
+        /* 行迹面板的收起状态复位成「展开」，两个方向都复位：
+           进来时不复位，用户看到的会是一个空屏幕加一个开关（上一次选完诗人
+           自动收起的状态被带过来了），会以为功能坏了；离开时也复位，
+           这样下次进来才是干净的。离开后面板本来就是 .hidden，收没收起看不出区别。 */
+        this.setRoutePanelHidden(false, { quiet: true });
         if (mode !== 'route') this.ctx.onClearRoute();
         this.hideRegionBar();
         /* 窄屏下行迹面板占着左侧，若右栏抽屉还开着，css 会让行迹面板整块隐去
@@ -943,25 +1035,204 @@ export class UI {
   }
 
   /* ================= 行迹 ================= */
+  /**
+   * 把诗人列表渲染进 #routePoetMenu 下拉浮层（替代原先的常驻列表）。
+   *
+   * 早先是「16 位诗人直接平铺在面板里」：
+   *  - 面板窄屏顶部 88 / 底部 96 之间的 56vh 就那么点空间，常驻列表
+   *    把详情挤到完全看不见；
+   *  - 想找诗人要先扫一遍 16 行才知道有没有；
+   *  - 选完人之后列表还占着位置，「选的是谁」与「详情」互相挤压。
+   *
+   * 改用 .dd-menu + 下拉触发后：
+   *  - 面板默认只剩 head + 详情，「选择诗人」按钮占 1 行；
+   *  - 点头按钮才弹出浮层（再按一次收起），浮层 max-height 56vh + 内部滚动；
+   *  - 选完人后自动收起，详情露出来 —— 在窄屏尤其有用：
+   *    不会同时占着浮层 + 详情两个面板级浮层。
+   *
+   * 键盘激活交给外层 bindDropdown（在 init 里调），这里只挂 click：
+   * 重复挂键盘监听会与 bindDropdown 的 Enter / Space 处理打架，
+   * 而且 role="button" 会与 role="option" 冲突。
+   */
   bindRoutes() {
-    const box = $('#routeList');
+    const box = $('#routePoetMenu');
+    if (!box) return;
     box.innerHTML = '';
     ROUTES.forEach((r) => {
-      const d = document.createElement('div');
+      const d = document.createElement('li');
       d.className = 'route-item';
+      d.setAttribute('role', 'option');
+      d.tabIndex = 0;
       d.dataset.id = r.id;
+      d.setAttribute('aria-label', `${r.name}，${r.title}，行迹 ${r.stops.length} 站`);
       d.innerHTML = `<div class="rn" style="color:${r.color}">${r.name}</div>
         <div class="rt">${r.title}</div><div class="rc">行迹 ${r.stops.length} 站</div>`;
       const activate = () => {
-        $$('#routeList .route-item').forEach((x) => x.classList.toggle('on', x === d));
+        $$('#routePoetMenu .route-item').forEach((x) => x.classList.toggle('on', x === d));
         this.renderRouteDetail(r);
         this.ctx.onBuildRoute(r);
+        /* 窄屏：选完诗人就把行迹面板收起来，把地图让出来。
+           面板在 390 宽下是 340px（占 87% 屏宽），不收的话用户「选了诗人
+           却看不见行迹画在哪」—— 而行迹才是这一步的目的。收起后左侧留出
+           #toggleRoute 开关，点一下就能把面板叫回来。
+           宽屏两栏并排、地图仍占中间空白区，没有这个问题，所以不收。 */
+        if (this.isNarrow()) this.setRoutePanelHidden(true);
       };
       d.onclick = activate;
-      this.keyboardActivate(d, activate, `${r.name}，${r.title}，行迹 ${r.stops.length} 站`);
       box.appendChild(d);
     });
     $('#routeClose').onclick = () => this.exitRouteMode();
+  }
+
+  /**
+   * 通用「按钮 + 浮层」下拉绑定。
+   * 复用于「巡游范围」与「诗人选择」两处 —— 同一组件解决同一类问题
+   * （原生 <select> 在窄屏由 OS 接管弹层 / 风格脱节）。
+   *
+   * opts:
+   *   onChange(value, label, opt)   — 选项点击时回调；
+   *                                   诗人选择不传，由 bindRoutes 的 onclick 自己处理 buildRoute，
+   *                                   这里只负责关浮层。
+   *   initial: { value }            — 初始值（用于更新按钮 label）；
+   *   autoClose: boolean            — 默认 true（点选项就关浮层）；
+   *   markSelected: boolean         — 是否给选中项加 .selected 类（默认 true）。
+   *
+   * 关闭时机：按钮再次点击、点浮层外部、按 Esc、按钮被滚出视口 ——
+   * 少一处就是「弹出来关不掉」或「浮层飘在屏幕外」的入口。
+   */
+  bindDropdown(selector, opts = {}) {
+    const root = typeof selector === 'string' ? $(selector) : selector;
+    if (!root) return null;
+    const btn = root.querySelector('.dd-btn');
+    const menu = root.querySelector('.dd-menu');
+    const label = root.querySelector('.dd-label');
+    if (!btn || !menu) return null;
+    const isOpen = () => !menu.classList.contains('hidden');
+    const options = $$('[role="option"]', menu);
+
+    /* 把浮层贴到按钮上，并**夹在视口内**。
+       不夹的话，底栏是横向滚动的（`.bottombar`），按钮可以停在视口左右边缘之外；
+       浮层照搬 `rect.left` 就会有一半在屏幕外，用户看到的是「下拉框位置偏移到
+       别的地方去了」。竖向同理：底栏贴底，向上弹的浮层若比上方空间还高，
+       顶部会被切掉，所以方向要按可用空间现算，而不是写死 dd-up / dd-down。 */
+    const positionMenu = () => {
+      const rect = btn.getBoundingClientRect();
+      const vw = window.innerWidth;
+      const vh = window.innerHeight;
+      /* 先定宽再量高：`min-width` 跟按钮对齐（下拉不该比触发它的按钮还窄），
+         但再宽也不许顶出视口 —— 底栏是横向滚动的，按钮可以停在边缘上。 */
+      menu.style.minWidth = Math.min(rect.width, vw - 16) + 'px';
+      const mw = menu.offsetWidth;
+      const mh = menu.offsetHeight;
+      menu.style.left = Math.max(8, Math.min(rect.left, vw - mw - 8)) + 'px';
+      /* 方向按可用空间定：优先尊重 dd-up / dd-down 的意图，但空间不够就翻面。
+         gap 6px 与 CSS 里的 6px 对齐。 */
+      const below = vh - rect.bottom;
+      const above = rect.top;
+      const wantUp = root.classList.contains('dd-up');
+      let up = wantUp ? (above >= mh + 6 || above >= below) : !(below >= mh + 6);
+      if (up && above < mh + 6 && below > above) up = false;
+      menu.style.top = (up ? rect.top : rect.bottom) + 'px';
+      menu.style.transform = up ? 'translateY(calc(-100% - 6px))' : 'translateY(6px)';
+      menu.style.bottom = 'auto';
+    };
+
+    const close = () => {
+      menu.classList.add('hidden');
+      btn.setAttribute('aria-expanded', 'false');
+    };
+    const open = () => {
+      /* 同时只开一个：两个下拉都挂在 document 上各自监听点击，
+         不互相收的话「先开巡游范围、再开诗人选择」会两个浮层一起挂在屏幕上。 */
+      this.closeDropdowns(root);
+      /* 菜单必须脱离原位置（移到 body 直接子节点），否则会被祖先的
+         transform / filter / perspective 拦截 fixed 定位 —— 典型的踩坑：
+         .bottombar 用了 transform: translateX(-50%) 居中，这个 transform
+         会把它变成内含 fixed 后代的「containing block」，导致菜单的
+         top/bottom 不再相对视口，而是相对 bottombar —— 浮层就跑到屏幕外了。
+         移到 body 后 fixed 定位重新相对视口，rect.top 也才符合预期。 */
+      if (menu.parentElement !== document.body) document.body.appendChild(menu);
+      /* 触发按钮若整个在视口外（底栏可以横向滚很远），先把按钮滚进来再贴浮层 ——
+         否则会得到一个「锚在一个看不见的按钮上」的浮层，位置再准也没意义。 */
+      const r0 = btn.getBoundingClientRect();
+      if (r0.right < 0 || r0.left > window.innerWidth
+        || r0.bottom < 0 || r0.top > window.innerHeight) {
+        btn.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+      }
+      /* 先显形再量尺寸：offsetWidth/Height 在 display:none 下恒为 0，
+         先量后显会把浮层当成 0×0，夹取与翻面全部失效。 */
+      menu.classList.remove('hidden');
+      positionMenu();
+      btn.setAttribute('aria-expanded', 'true');
+    };
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (isOpen()) close(); else open();
+    });
+    /* 点浮层内部不冒泡到 document，否则「点选项」的关闭会被外部点击监听
+       抢先关掉，看不到 label 更新（冒泡顺序：opt → menu → document）。 */
+    menu.addEventListener('click', (e) => e.stopPropagation());
+    document.addEventListener('click', (e) => {
+      if (!root.contains(e.target)) close();
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && isOpen()) {
+        close();
+        btn.focus();
+      }
+    });
+    /* 滚动 / 改窗口大小：按钮位置会变，浮层不能留在原地。
+       按钮滚出视口就干脆收起 —— 留一个悬在空中的浮层比关掉更让人困惑。 */
+    const reflow = () => {
+      if (!isOpen()) return;
+      const r = btn.getBoundingClientRect();
+      if (r.bottom < 0 || r.top > window.innerHeight
+        || r.right < 0 || r.left > window.innerWidth) { close(); return; }
+      positionMenu();
+    };
+    window.addEventListener('scroll', reflow, true);
+    window.addEventListener('resize', reflow);
+
+    /* 选项的「按钮 label 文本」默认取整个 option 的 textContent（巡游范围 / 简单菜单适用）；
+       诗人选项里塞了「李白 / 仗剑去国 / 行迹 9 站」三行，整段拼出来丑且长，
+       用 labelFrom 指定只取诗人姓名这一行（.rn）。 */
+    const labelOf = (opt) => {
+      const raw = opts.labelFrom
+        ? (opt.querySelector(opts.labelFrom)?.textContent || opt.textContent)
+        : opt.textContent;
+      return raw.trim().replace(/\s+/g, ' ');
+    };
+    options.forEach((opt) => {
+      opt.addEventListener('click', () => {
+        const value = opt.dataset.value || opt.dataset.id;
+        const text = labelOf(opt);
+        if (label) label.textContent = text;
+        if (opts.markSelected !== false) {
+          options.forEach((o) => o.classList.toggle('selected', o === opt));
+        }
+        if (opts.onChange) opts.onChange(value, text, opt);
+        if (opts.autoClose !== false) close();
+      });
+      opt.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ' || e.key === 'Spacebar') {
+          e.preventDefault();
+          opt.click();
+        }
+      });
+    });
+    if (opts.initial && label) {
+      const init = menu.querySelector(`[data-value="${opts.initial.value}"]`)
+        || menu.querySelector(`[data-id="${opts.initial.value}"]`);
+      if (init) label.textContent = labelOf(init);
+    }
+    const handle = { open, close, root, btn, menu, options, labelOf };
+    this._dropdowns.push(handle);
+    return handle;
+  }
+
+  /** 收起全部下拉（可保留一个）。面板收起 / 切模式时调用，免得浮层悬在原地。 */
+  closeDropdowns(except) {
+    (this._dropdowns || []).forEach((d) => { if (d.root !== except) d.close(); });
   }
 
   /**
@@ -997,9 +1268,15 @@ export class UI {
    */
   exitRouteMode() {
     $('#routePanel').classList.add('hidden');
+    /* 收起状态一并复位。不复位的话，窄屏下「选诗人 → 自动收起 → 退出 →
+       再进行迹模式」会看到一块空屏幕（面板还带着 .collapsed 平移在屏幕外），
+       而开关上的文字写着「收起」—— 用户只能靠点一下开关猜出来。 */
+    this.setRoutePanelHidden(false, { quiet: true });
     document.getElementById('leftPanel').style.display = '';
     $$('#modeNav button').forEach((x) => x.classList.toggle('active', x.dataset.mode === 'explore'));
-    $$('#routeList .route-item').forEach((x) => x.classList.remove('on'));
+    $$('#routePoetMenu .route-item').forEach((x) => x.classList.remove('on'));
+    // 面板收了，挂在 body 上的诗人下拉浮层不能留着 —— 它已经不属于任何可见的面板了
+    this.closeDropdowns();
     $('#routeDetail').innerHTML = '';
     // 气泡是「选中了某位诗人」才有的东西，模式一退就没有诗人了，必须一起清掉 ——
     // 面板、左栏、模式按钮、地图聚焦已经是一件事的四个侧面，气泡是第五个。
@@ -1144,8 +1421,10 @@ export class UI {
       return r.width > 0 && r.height > 0 ? r : null;
     };
     // 左侧：取「还在屏幕内」的最靠右的那条边
+    // 收起的面板会整块平移到屏幕外（x ≈ -364），`r.right > GAP + 8` 自然把它排除 ——
+    // 于是那条带子自动让出来，不必在这里再判一次「收没收起」。
     let left = GAP;
-    [$('#routePanel'), $('#leftPanel'), $('#toggleLeft')].forEach((el) => {
+    [$('#routePanel'), $('#leftPanel'), $('#toggleLeft'), $('#toggleRoute')].forEach((el) => {
       const r = visible(el);
       if (r && r.right > GAP + 8) left = Math.max(left, r.right + GAP);
     });

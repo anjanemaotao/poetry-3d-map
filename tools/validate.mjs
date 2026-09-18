@@ -319,7 +319,30 @@ console.log('[12] 抽屉开关位置');
   });
   const hasBoth = /\bid="toggleLeft"/.test(html) && /\bid="toggleRight"/.test(html);
   if (!hasBoth) { bad('index.html 里找不到 toggleLeft / toggleRight 抽屉开关'); n++; }
-  if (!n) ok(`${panelBlocks.length} 个面板外置开关，均不在面板内部`);
+  /* 行迹面板（#routePanel）是第三个会平移收起的容器，同一个坑要一并钉住：
+     它的开关必须留在外面，否则收起后跟着一起飞出屏幕。
+     #routePanel 是 <div> 且有嵌套，不能用「到第一个 </div> 为止」来截 ——
+     那样只会截到内层，真把开关塞进去反而检不出来。这里按 div 配平扫到真正的收尾。 */
+  const hasRouteToggle = /\bid="toggleRoute"/.test(html);
+  if (!hasRouteToggle) { bad('index.html 里找不到 toggleRoute 行迹面板开关'); n++; }
+  const rpStart = html.indexOf('id="routePanel"');
+  if (rpStart < 0) { bad('index.html 里找不到 #routePanel'); n++; }
+  else {
+    let depth = 0;
+    let i = html.lastIndexOf('<', rpStart);
+    let end = html.length;
+    const tag = /<\/?div\b[^>]*>/g;
+    tag.lastIndex = i;
+    for (let m; (m = tag.exec(html)); ) {
+      depth += m[0][1] === '/' ? -1 : 1;
+      if (depth === 0) { end = m.index; break; }
+    }
+    if (html.slice(i, end).includes('toggleRoute')) {
+      bad('#routePanel 内部有 .panel-toggle：行迹面板同样靠 transform 收起，开关会跟着移出视野');
+      n++;
+    }
+  }
+  if (!n) ok(`${panelBlocks.length} 个面板外置开关 + 行迹开关，均不在面板内部`);
 }
 
 /* ---------- 13. 全球底图数据（地球模式） ---------- */

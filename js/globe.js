@@ -681,25 +681,47 @@ export class Globe {
     // 流动光点：沿航线跑，给「这是一条路」一个方向感。
     // 早先每个点用 SphereGeometry(0.011) + 纯白加色混合 —— 在 d=2 拉近后
     // 屏幕直径 ≈ 30px，9 个站点挤在 200px 横向范围里就变成一团白色棉花，
-    // 失去「方向感」只剩「一团光」。改成「行迹色 + 半径 0.005 + 18 个 + 透明度
+    // 失去「方向感」只剩「一团光」。改成「行迹色 + 半径 0.005 + 透明度
     // 从 0.85 衰减到 0.18」：颜色融进航线、光点更小更密、尾迹淡出 —— 这才像
     // 一条「流淌的路」，而不是「几团棉花」。
+    //
+    // 同样要避开站点位置：dot 等间距采样时 offset = i/dotCount，当 dot 数与 stop 数
+    // 不互素时（比如 9 站 / 18 点）会有几个 dot 落在站点三维位置上，与站点光圈 +
+    // 序号牌叠在一起被洗白，每站都裹一团白雾。修法见 effects.js 同款实现：先沿曲线
+    // 高密度采样反查站点弧长，dot 严格落在每段 (s_k, s_{k+1}) 内部。
     const dotRadius = 0.005;
-    const dotCount = 18;
+    const dotsPerLeg = 3;
     const dotColor = new THREE.Color(route.color);
-    for (let i = 0; i < dotCount; i++) {
-      const fade = 1 - i / dotCount;          // 头部 1.0 → 尾部 0.0
-      const opacity = 0.18 + 0.67 * fade;     // 头部 0.85、尾部 0.18
-      const d = new THREE.Mesh(
-        new THREE.SphereGeometry(dotRadius, 8, 6),
-        new THREE.MeshBasicMaterial({
-          color: dotColor, transparent: true, opacity,
-          blending: THREE.AdditiveBlending, depthWrite: false,
-        }),
-      );
-      d.renderOrder = 3;       // 底衬 1 → 航线 2 → 光点 3 → 序号牌 4
-      group.add(d);
-      this.routeDots.push({ mesh: d, offset: i / dotCount });
+    const ARC_SAMPLES = 200;
+    const arcAtStop = stops.map((s) => {
+      const target = s.marker.dir;
+      let best = 0, bestD = Infinity;
+      for (let i = 0; i <= ARC_SAMPLES; i++) {
+        const u = i / ARC_SAMPLES;
+        const v = curve.getPointAt(u);
+        const d = v.distanceToSquared(target);
+        if (d < bestD) { bestD = d; best = u; }
+      }
+      return best;
+    });
+    for (let k = 0; k < stops.length - 1; k++) {
+      const a = arcAtStop[k], b = arcAtStop[k + 1];
+      const span = b - a;
+      for (let i = 1; i <= dotsPerLeg; i++) {
+        const arc = a + (i / (dotsPerLeg + 1)) * span;
+        const fade = 1 - arc;
+        const opacity = 0.18 + 0.67 * fade;
+        const d = new THREE.Mesh(
+          new THREE.SphereGeometry(dotRadius, 8, 6),
+          new THREE.MeshBasicMaterial({
+            color: dotColor, transparent: true, opacity,
+            blending: THREE.AdditiveBlending, depthWrite: false,
+          }),
+        );
+        d.renderOrder = 3;       // 底衬 1 → 航线 2 → 光点 3 → 序号牌 4
+        group.add(d);
+        this.routeDots.push({ mesh: d, offset: arc });
+      }
     }
 
     /* 序号牌：贴在站点正上方一点点，朝向由 Sprite 自己保证（永远面向相机）。
@@ -778,12 +800,17 @@ export class Globe {
    *
    * 版图那边是靠 setBeaconVisible 逐站开关的，地球上必须同样处理 ——
    * 否则聚焦后版图只剩 9 根光柱、地球上却还亮着 79 个点，两边对不上。
+   *
+   * 聚焦时**连被聚焦的站点也一起隐去**：它们由序号牌代表。序号牌就贴在站点正上方
+   * 0.016 个地球半径处，与地标几乎重合，而地标是**加色混合**的白色光晕、还比序号牌
+   * 大一圈 —— 透出来的那层光会把整块序号牌洗白（泛光再放大一次，肉眼就是「数字糊了」）。
+   * 把地标收掉，序号牌就干净地立在那个位置上；点选仍然可用，因为序号牌自己也在拾取表里
+   * （见 pickables）。这与版图那边「2D 下序号牌取代落点圆点」是同一条原则。
    */
   setRouteFocus(set) {
     this.routeFocus = set || null;
-    for (const m of this.markers) {
-      m.sprite.visible = !this.routeFocus || this.routeFocus.has(m.site.id);
-    }
+    const hidden = !!this.routeFocus;
+    for (const m of this.markers) m.sprite.visible = !hidden;
   }
 
   /** 每帧：行迹管线粗细与序号牌尺寸都按深度补偿（与地标同一条规则） */
