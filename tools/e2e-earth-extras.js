@@ -190,6 +190,8 @@
     $('#routeClose')?.click();
     await sleep(900);
 
+    /* 第 12 节已拆到 e2e-earth-extras2.js，避免 daemon 一次跑太长脚本。 */
+
     return out;
   };
 

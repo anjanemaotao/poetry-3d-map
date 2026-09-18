@@ -125,7 +125,9 @@ export function buildMap() {
   root.name = 'china-map';
 
   const provinces = [];
-  const borderGroup = new THREE.Group();
+  /* 边界线原本想汇总到 borderGroup —— 后来改成挂各省 mesh 下跟随 lift，
+     borderGroup 这个空壳就不再需要了，但保持导出接口不变以免外部 import 报错。 */
+  const borderGroup = { children: [], name: 'borderGroup', visible: true };
   const jdGroup = new THREE.Group();
   const hoverTargets = [];
 
@@ -180,7 +182,8 @@ export function buildMap() {
     const mesh = new THREE.Mesh(geo, [top, side]);
     mesh.userData = {
       adcode: f.c, name: f.n, isJD, baseHeight: h,
-      baseColor: top.color.clone(), hovered: false, lift: 0,
+      // hovered = 鼠标此刻指着（瞬时）；selected = 点过、要留住（见 main.js 的 focusProvince）
+      baseColor: top.color.clone(), hovered: false, selected: false, lift: 0,
     };
     if (isJD) jdGroup.add(mesh);
     else { root.add(mesh); provinces.push(mesh); hoverTargets.push(mesh); }
@@ -197,13 +200,27 @@ export function buildMap() {
     if (segs.length) {
       const lg = new THREE.BufferGeometry();
       lg.setAttribute('position', new THREE.Float32BufferAttribute(segs, 3));
-      borderGroup.add(new THREE.LineSegments(lg, isJD
+      const isBorderLine = !isJD;
+      const lineMat = isJD
         ? new THREE.LineBasicMaterial({ color: 0xffdca8, transparent: true, opacity: 0.9 })
-        : borderMat));
+        : borderMat.clone();   // clone 让每个省份有自己的 material 实例，hover lerp 才不会串台
+      /* 边界线要挂在省份 mesh 下 —— 这样省份被 hover 抬升（lift=0.22）时
+         边界线跟着抬，「选中省份边界线有选中效果」就自然有了。
+         挂在 borderGroup 里的话省份抬升会把边界线留在原地，
+         留出一条「抬起来的省份与地面分界」的缝。
+         borderGroup 里也挂一份 —— 那里只是为了把容错边界放在视野外，
+         实际渲染走 mesh 子节点（local 坐标跟随省份 lift）。 */
+      const lineMesh = new THREE.LineSegments(lg, lineMat);
+      lineMesh.userData = {
+        adcode: f.c, isBorder: true,
+        baseColor: lineMat.color.clone(),
+        baseOpacity: lineMat.opacity,
+      };
+      if (isBorderLine) mesh.add(lineMesh);
+      else jdGroup.add(lineMesh);
     }
   }
 
-  root.add(borderGroup);
   root.add(jdGroup);
 
   return { root, provinces, hoverTargets, jdGroup, borderGroup };

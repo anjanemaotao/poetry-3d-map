@@ -585,6 +585,85 @@
       }
     }
 
+    /* ================= 8. 选中省份 → 边界线跟着亮 ================= */
+    /**
+     * 这一组守的是「点了某个省，看不出点的是哪一块」。三个坑都在这里翻过车：
+     *
+     * (a) 边界线最早挂在 root 直属的 borderGroup 里，省份 hover 抬起 0.22 时线留在原地，
+     *     抬起来的那块与地面之间裂出一道缝。改成 mesh.add(lineMesh) 才跟着走 ——
+     *     所以断言里量的是「线的世界坐标 == 省份的世界坐标」，而不是看代码里写没写 add。
+     * (b) 各省必须各自 clone 一份 material。共用一份的话 lerp 会串台：点亮一个省，
+     *     全省边界线一起变橙 —— 那就等于没有选中效果。
+     * (c) focusProvince 里曾写成 `m.userData.hovered = m.adcode === u.adcode`（漏了 userData）：
+     *     Mesh 上没有 adcode，恒为 undefined，这一句把**所有**省份的高亮都置成 false，
+     *     点了省份高亮反而当场熄灭。更根本的是 hovered 是瞬时的，鼠标一移到诗词卡片上
+     *     就没了 —— 所以另开 selected 字段把「选中」留住。
+     *
+     * 颜色判定用三通道最大差值（0~1）而不是比字符串：lerp 是渐变的，
+     * 永远到不了精确的 #ffb84a，写死等值必然假失败。
+     */
+    {
+      const V3 = app.map.provinces[0].position.constructor;
+      const hex = (c) => c.getHexString();
+      const dist = (c, h) => {   // 与目标色的三通道最大差值，0=完全一致
+        const t = new (c.constructor)(h);
+        return Math.max(Math.abs(c.r - t.r), Math.abs(c.g - t.g), Math.abs(c.b - t.b));
+      };
+      const borderOf = (m) => m.children.find((c) => c.userData && c.userData.isBorder);
+      const bordered = app.map.provinces.filter(borderOf);
+
+      rec('每个省份 mesh 下都挂了自己的边界线', bordered.length >= 30,
+        `${bordered.length}/${app.map.provinces.length}`);
+      rec('各省边界线材质是独立实例（hover 才不会串台）',
+        borderOf(bordered[0]).material !== borderOf(bordered[1]).material);
+
+      // 挑一个「境内有诗境」的省，顺带让底部诗词条真的打开，才能测到「收起即复位」
+      const target = bordered.find((m) => (app.PROVINCE_SITES.get(m.userData.adcode)?.sites || []).length)
+        || bordered[0];
+      const line = borderOf(target);
+      const baseHex = hex(line.userData.baseColor);
+      const baseOpacity = line.userData.baseOpacity;
+      rec('边界线记下了复位基准（baseColor / baseOpacity）',
+        baseOpacity > 0 && /^[0-9a-f]{6}$/.test(baseHex), `#${baseHex} / ${baseOpacity}`);
+
+      const others = bordered.filter((m) => m !== target).slice(0, 3).map(borderOf);
+
+      app.focusProvince(target);
+      await sleep(900);   // lerp 是 dt*10，900ms 足够收敛（54 帧后残差 5e-5）
+
+      rec('选中省份 → 全场只有这一块是选中态',
+        app.map.provinces.filter((m) => m.userData.selected).length === 1,
+        `${app.map.provinces.filter((m) => m.userData.selected).length} 块`);
+      rec('选中省份 → 地形抬起', target.userData.lift > 0.15,
+        `lift=${target.userData.lift.toFixed(3)}`);
+      const wp = line.getWorldPosition(new V3());
+      const mp = target.getWorldPosition(new V3());
+      rec('边界线挂在省份 mesh 下（跟着一起抬，不留缝）',
+        line.parent === target && Math.abs(wp.y - mp.y) < 0.01,
+        `Δy=${Math.abs(wp.y - mp.y).toFixed(4)}`);
+      rec('选中省份 → 边界线变实（opacity → 0.95）', line.material.opacity > 0.85,
+        `opacity=${line.material.opacity.toFixed(3)}`);
+      rec('选中省份 → 边界线换成饱和橙金 #ffb84a', dist(line.material.color, '#ffb84a') < 0.08,
+        `#${hex(line.material.color)} Δ=${dist(line.material.color, '#ffb84a').toFixed(3)}`);
+      rec('其它省份边界线不被串台（仍是淡金原色）',
+        others.every((l) => dist(l.material.color, '#' + hex(l.userData.baseColor)) < 0.08
+          && l.material.opacity < 0.6),
+        others.map((l) => `#${hex(l.material.color)}/${l.material.opacity.toFixed(2)}`).join(' '));
+
+      /* 收起诗词条 → 选中态要一起清，否则「列表没了、那块地还亮着」，
+         用户会以为列表是被误关的。四个收起入口（点空白 / 点 × / 切模式 / 进练习）
+         都走 hideRegionBar 这一个出口，这里测 × 这一个。 */
+      $('#rbClose').click();
+      await sleep(1200);
+      rec('收起诗词条 → 省份选中态清空', app.map.provinces.every((m) => !m.userData.selected));
+      rec('收起诗词条 → 边界线复位到原色', dist(line.material.color, '#' + baseHex) < 0.08,
+        `#${hex(line.material.color)} → #${baseHex}`);
+      rec('收起诗词条 → 边界线不透明度复位', Math.abs(line.material.opacity - baseOpacity) < 0.06,
+        `${line.material.opacity.toFixed(3)} / ${baseOpacity}`);
+      rec('收起诗词条 → 地形落回', target.userData.lift < 0.05,
+        `lift=${target.userData.lift.toFixed(3)}`);
+    }
+
     return R;
   })();
 })()
