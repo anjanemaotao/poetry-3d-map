@@ -503,6 +503,46 @@
       rec('球面序号牌数 = 行迹站数', app.globe.routeBadges.length === nStops,
         `${app.globe.routeBadges.length} / ${nStops}`);
 
+      /* ---- 行迹的诗词卡片（气泡）：地球模式下必须跟着一起显示 ----
+         ★ 这里守的是一个**真漏过**的 bug。原先这一节只查了「序号牌数 = 站数」，
+         而气泡的可见性走的是另一条路 —— main.js updateRouteBubbles 里那句
+         `if (!m || !m.sprite.visible) return {...visible:false}`。
+         它借的是「地标光点画不画」这个字段；setRouteFocus 改成「聚焦时连行迹站点
+         的地标一起收起」（为了不让加色白晕洗白序号牌）之后，这句话就把 9 张卡片
+         整批判成不可见 —— 而序号牌、球面航线、右侧面板、拾取表**全都正常**，
+         所以当时这套测试全绿，是用户截图报上来的。
+         教训：口径要量**实际显示了几张**，不能只量 DOM 里有没有节点 ——
+         节点一直在，只是全被 display:none 了。 */
+      const bubbleShown = () => [...document.querySelectorAll('#bubbleLayer > *')]
+        .filter((el) => getComputedStyle(el).display !== 'none');
+      const bubbleDom = document.querySelectorAll('#bubbleLayer > *').length;
+      rec('带着行迹进地球 → 诗词卡片节点数 = 站数', bubbleDom === nStops, `${bubbleDom} / ${nStops}`);
+      rec('带着行迹进地球 → 诗词卡片真的显示出来（不是被判成不可见）',
+        bubbleShown().length === nStops, `显示 ${bubbleShown().length} / ${nStops}`);
+      /* 卡片内容必须渲染完整。注意**不能**断言「每张都有诗名」——
+         一条行迹里有的站点这位诗人并未留下作品（李白 9 站里有 2 站如此），
+         那种卡片显示的是「此行未见存世诗作」，是正常形态。
+         这里守的是「不能是空壳」：要么诗名、要么那句说明，二者必居其一。 */
+      const withPoem = bubbleShown().filter((el) => el.querySelector('.rb-poem-line')).length;
+      const noPoem = bubbleShown().filter((el) => el.querySelector('.rb-none')).length;
+      rec('诗词卡片带着地名与诗名（无作品的站点要有说明，不能是空壳）',
+        bubbleShown().every((el) => el.querySelector('.rb-name')
+          && (el.querySelector('.rb-poem-line') || el.querySelector('.rb-none'))),
+        `${withPoem} 张有诗名 / ${noPoem} 张写「未见存世诗作」`);
+
+      /* 负向验证：气泡不再借「地标光点画不画」当判据 ——
+         手动把 79 个地标全收起来，卡片不该跟着消失。
+         修复前正是这个状态（sprite.visible 全 false → 9 张全部被判不可见），
+         所以这条在修复前必然变红，不是恒真断言。 */
+      const keepMarkerVis = app.globe.markers.map((m) => m.sprite.visible);
+      app.globe.markers.forEach((m) => { m.sprite.visible = false; });
+      await sleep(400);
+      const shownAfterHide = bubbleShown().length;
+      app.globe.markers.forEach((m, i) => { m.sprite.visible = keepMarkerVis[i]; });
+      await sleep(300);
+      rec('负向验证：把地标光点全收起来，诗词卡片不受影响（没再借 sprite.visible）',
+        shownAfterHide === nStops, `${shownAfterHide} / ${nStops}`);
+
       /* 关键：航线的抬升必须是「贴着地表飞」的量级。
          实测最大半径 = 站点地形半径(≤1.0286) + 抬升(≤0.11)。 */
       let rMax2 = 0;
@@ -599,6 +639,41 @@
       }));
       rec('序号牌就落在站点地标的位置上（取代地标不丢位置）', worstD < 0.05,
         `最大偏差 ${worstD.toFixed(4)} 个地球半径`);
+
+      /* ---- 地名标注：地球行迹聚焦时整层让位 ----
+         理由不是「地标被隐去了」，而是气泡卡片每张头部就写着地名，再加一层会互相压住。
+         实测（1440×900，李白 9 站）：地球这边地名 9 条 / 气泡 9 张时相交 6 对、
+         其中 4 条被卡片中心盖住；而 3D 版图那边同样是这两个东西却是 0 相交 ——
+         差异在几何：版图相机在 12.8，站点挤在中央一小块、气泡停在左右空白带；
+         地球相机在 2.0 上下，站点投影铺满全屏、一直铺进停靠带。
+         口径量**实际显示条数**，不读任何意图字段。 */
+      const earthLabels = () => [...document.querySelectorAll('#labelLayer .map-label')]
+        .filter((el) => getComputedStyle(el).display !== 'none');
+      rec('地球行迹聚焦 → 地名标注整层让位（不与诗词卡片抢位置）',
+        earthLabels().length === 0, `${earthLabels().length} 条`);
+
+      /* 负向验证一：清掉聚焦集合，地名必须回来 ——
+         否则上面那条可能是「地球上本来就不标地名」的恒真断言
+         （比如相机距离超过了 EARTH_LABEL_DIST 闸门）。 */
+      const keepFocus2 = app.globe.routeFocus;
+      app.globe.setRouteFocus(null);
+      await sleep(500);
+      const backLabels = earthLabels().length;
+      rec('负向验证：清掉聚焦集合后地球地名回来（上面那条不是恒真）',
+        backLabels > 0,
+        `${backLabels} 条（相机距离 ${camDist().toFixed(2)}，闸门 ${app.EARTH_LABEL_DIST}）`);
+
+      /* 负向验证二：地名不再借「地标光点画不画」当判据 ——
+         把 79 个地标全收起来，地名不该跟着消失。 */
+      const keepVis2 = app.globe.markers.map((m) => m.sprite.visible);
+      app.globe.markers.forEach((m) => { m.sprite.visible = false; });
+      await sleep(400);
+      const labelsAfterHide = earthLabels().length;
+      app.globe.markers.forEach((m, i) => { m.sprite.visible = keepVis2[i]; });
+      app.globe.setRouteFocus(keepFocus2);
+      await sleep(500);
+      rec('负向验证：把地标光点全收起来，地名不跟着消失（没再借 sprite.visible）',
+        labelsAfterHide === backLabels, `${labelsAfterHide} vs ${backLabels}`);
 
       /* 负向验证：清掉聚焦集合，79 个地标必须全部回来 ——
          否则上面那条可能是「本来就只有 9 个可见」的恒真断言。 */

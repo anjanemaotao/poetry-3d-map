@@ -519,6 +519,69 @@
       }
       rec('气泡之间互不重叠', ov6 === 0, `${ov6} 对重叠`);
 
+      /* 引线在序号侧的端点（.rb-dot）要落在圆圈**边缘**，不能压在序号数字上 ——
+         那枚 7px 的圆点带光晕后视觉直径约 13px，落在圆心上就把数字糊掉了
+         （用户截图：长安站的「5」被盖住）。
+         口径量「端点屏幕位置到序号牌圆心的距离 ÷ 圆圈半径」，落在边缘时 ≈ 1。
+         圆圈半径由 sprite 的屏幕尺寸换算（贴图 128 宽、圆外缘 48.5 → 0.758），
+         与 main.js 的 BADGE_RING_RATIO.map 是同一个数。 */
+      const ringPxOf = (sprite) => {
+        const fwd = new sprite.position.constructor();
+        app.camera.getWorldDirection(fwd);
+        const d = sprite.position.clone().sub(app.camera.position).dot(fwd);
+        if (!(d > 0.001)) return 0;
+        const texPx = sprite.scale.x / (d * 2 * Math.tan(app.camera.fov * Math.PI / 360)) * window.innerHeight;
+        return texPx / 2 * 0.758;
+      };
+      const badgeScreen = (sprite) => {
+        const p = sprite.position.clone().project(app.camera);
+        return { x: (p.x * 0.5 + 0.5) * window.innerWidth, y: (-p.y * 0.5 + 0.5) * window.innerHeight };
+      };
+      const dotRatios = [];
+      const shownBubbles = [...document.querySelectorAll('#bubbleLayer > *')]
+        .filter((el) => getComputedStyle(el).display !== 'none');
+      shownBubbles.forEach((el) => {
+        const id = (el.dataset.key || '').split('#')[0];
+        const badge = (app.effects.routeBadges || []).find((b) => b.siteId === id);
+        const dot = el.querySelector('.rb-dot');
+        if (!badge || !dot) return;
+        const r = dot.getBoundingClientRect();
+        const c = badgeScreen(badge.sprite);
+        const ring = ringPxOf(badge.sprite);
+        if (ring > 0) {
+          dotRatios.push({
+            id,
+            ratio: Math.hypot(r.left + r.width / 2 - c.x, r.top + r.height / 2 - c.y) / ring,
+          });
+        }
+      });
+      const badDots = dotRatios.filter((x) => x.ratio < 0.7);
+      rec('引线端点落在序号圆圈边缘（不压在数字上）',
+        dotRatios.length > 0 && badDots.length === 0,
+        `${dotRatios.length} 个端点，最小比值 ${dotRatios.length ? Math.min(...dotRatios.map((x) => x.ratio)).toFixed(2) : 'n/a'}`);
+
+      /* 负向验证：把端点手动挪回圆心，上面那条必须真的变红 ——
+         否则它可能只是「端点本来就离圆心很远」的恒真断言。
+         用 transform 平移，量完立刻还原（位置是每帧由 JS 重算的，不还原也不影响下一帧，
+         但还原了这条负向验证本身才不会污染后面的断言）。 */
+      if (shownBubbles.length) {
+        const el0 = shownBubbles[0];
+        const id0 = (el0.dataset.key || '').split('#')[0];
+        const b0 = (app.effects.routeBadges || []).find((b) => b.siteId === id0);
+        const d0 = el0.querySelector('.rb-dot');
+        if (b0 && d0) {
+          const c0 = badgeScreen(b0.sprite);
+          const r0 = d0.getBoundingClientRect();
+          d0.style.transform = `translate(${c0.x - (r0.left + r0.width / 2)}px, ${c0.y - (r0.top + r0.height / 2)}px)`;
+          const r1 = d0.getBoundingClientRect();
+          const ratio1 = Math.hypot(r1.left + r1.width / 2 - c0.x, r1.top + r1.height / 2 - c0.y)
+            / (ringPxOf(b0.sprite) || 1);
+          d0.style.transform = '';
+          rec('负向验证：端点被挪回圆心时那条口径确实判得出（比值 < 0.2）',
+            ratio1 < 0.2, `比值 ${ratio1.toFixed(2)}`);
+        }
+      }
+
       // 切换诗人 → 气泡按新诗人的作品刷新（站点名应当与新行迹一致）
       const items7 = [...document.querySelectorAll('#routePoetMenu .route-item')];
       if (items7.length >= 2) {
