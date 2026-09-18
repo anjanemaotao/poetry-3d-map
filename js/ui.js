@@ -833,6 +833,8 @@ export class UI {
   hideRegionBar() {
     $('#regionBar').classList.add('hidden');
     document.body.classList.remove('rb-open');
+    // 让主程序同步清掉省份选中态（地图上的那块地要跟着灭）
+    this.ctx?.onHideRegion?.();
   }
 
   /* ================= 诗词详情弹窗 ================= */

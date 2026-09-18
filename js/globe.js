@@ -678,17 +678,28 @@ export class Globe {
     this._tubeComp = comp;
     group.add(this.routeTube);
 
-    // 流动光点：沿航线跑，给「这是一条路」一个方向感
-    for (let i = 0; i < 12; i++) {
+    // 流动光点：沿航线跑，给「这是一条路」一个方向感。
+    // 早先每个点用 SphereGeometry(0.011) + 纯白加色混合 —— 在 d=2 拉近后
+    // 屏幕直径 ≈ 30px，9 个站点挤在 200px 横向范围里就变成一团白色棉花，
+    // 失去「方向感」只剩「一团光」。改成「行迹色 + 半径 0.005 + 18 个 + 透明度
+    // 从 0.85 衰减到 0.18」：颜色融进航线、光点更小更密、尾迹淡出 —— 这才像
+    // 一条「流淌的路」，而不是「几团棉花」。
+    const dotRadius = 0.005;
+    const dotCount = 18;
+    const dotColor = new THREE.Color(route.color);
+    for (let i = 0; i < dotCount; i++) {
+      const fade = 1 - i / dotCount;          // 头部 1.0 → 尾部 0.0
+      const opacity = 0.18 + 0.67 * fade;     // 头部 0.85、尾部 0.18
       const d = new THREE.Mesh(
-        new THREE.SphereGeometry(0.011, 8, 6),
+        new THREE.SphereGeometry(dotRadius, 8, 6),
         new THREE.MeshBasicMaterial({
-          color: 0xffffff, transparent: true, opacity: 0.95 - i * 0.06,
+          color: dotColor, transparent: true, opacity,
           blending: THREE.AdditiveBlending, depthWrite: false,
         }),
       );
+      d.renderOrder = 3;       // 底衬 1 → 航线 2 → 光点 3 → 序号牌 4
       group.add(d);
-      this.routeDots.push({ mesh: d, offset: i / 12 });
+      this.routeDots.push({ mesh: d, offset: i / dotCount });
     }
 
     /* 序号牌：贴在站点正上方一点点，朝向由 Sprite 自己保证（永远面向相机）。

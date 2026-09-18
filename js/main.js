@@ -40,6 +40,11 @@ let visibleSites = [];
 let selectedId = null;
 let hoveredId = null;
 let hoveredProvince = null;
+/* 「点中的省份」与「鼠标悬停的省份」要分开记。
+   悬停是瞬时的（鼠标一走就没了），选中则要留住 —— 用户点了某省去看诗词卡片时，
+   鼠标早就移到卡片上去了，如果只靠 hovered，那一块地立刻掉回去、
+   边界线也跟着灭，「我到底点的是哪一块」就丢了。 */
+let selectedProvince = null;
 let tourTimer = null;
 const tour = { playing: false, scope: 'filtered', index: 0, list: [] };
 
@@ -621,6 +626,10 @@ function applyEarthMode(on, opts = {}) {
     ocean.root.visible = false;
     rivers.visible = false;
     effects.beaconGroup.visible = false;
+    /* effects 设到 'earth' 模式：所有 3D 装饰隐藏 + 清空存量 ripple）——
+       ripple 是直接 add 到 this.scene 的（不在 beaconGroup 下），
+       不显式清掉的话「地图档坐标创建的省份级圆环」会落到地球档上变成大光环。 */
+    effects.setMode('earth');
     if (effects.routeGroup) effects.routeGroup.visible = false;
     if (effects.cloudGroup) effects.cloudGroup.visible = false;
     /* 地名标注层**不整层关掉** —— 地球模式下也有地名要显示（拉近之后逐个冒出来）。
@@ -664,6 +673,10 @@ function applyEarthMode(on, opts = {}) {
     ocean.root.visible = true;
     rivers.visible = state.layers.rivers;
     effects.beaconGroup.visible = true;
+    /* 退出地球档，effects 回到 '3d'：所有 3D 装饰（光柱/灯球/光晕/地面光圈）恢复。
+       这里走 setMode 而不是 init 里 button —— setMode 还会恢复 mode 字段，
+       让 setSelected 不再被「地球档不调 ripple」的闸门卡住。 */
+    effects.setMode('3d');
     if (effects.routeGroup) effects.routeGroup.visible = true;
     if (effects.cloudGroup) effects.cloudGroup.visible = state.layers.clouds;
     document.getElementById('labelLayer').style.display = state.layers.labels ? '' : 'none';
@@ -1027,9 +1040,22 @@ function focusProvince(mesh) {
     ? `${u.name}：${sites.length} 处诗境 · ${poemCount} 首诗词`
     : (all.length ? `${u.name}：本区 ${all.length} 处诗境被当前筛选隐藏了` : `${u.name}：暂未收录诗境`));
 
-  // 让被点中的省份保持高亮，用户才知道自己点到了哪一块
-  map.hoverTargets.forEach((m) => { m.userData.hovered = m.adcode === u.adcode; });
-  hoveredProvince = mesh;
+  /* 让被点中的省份保持高亮，用户才知道自己点到了哪一块。
+     注意是 `m.userData.adcode` —— 早先写成 `m.adcode`（漏了 userData），
+     Mesh 上没有这个属性，恒为 undefined，于是这一句把**所有**省份的 hovered
+     都置成 false：点了省份，高亮反而当场熄灭，抬起的地形立刻掉回去。
+     而且这里要写的是「选中」而不是「悬停」：鼠标马上就会移到诗词卡片上，
+     用 hovered 的话点完一秒就灭，看不出选中了谁。 */
+  clearProvinceSelection();
+  mesh.userData.selected = true;
+  selectedProvince = mesh;
+}
+
+/** 清掉省份选中态（切到 2D / 地球 / 重新筛选时用） */
+function clearProvinceSelection() {
+  if (selectedProvince) selectedProvince.userData.selected = false;
+  selectedProvince = null;
+  map.hoverTargets.forEach((m) => { m.userData.selected = false; });
 }
 
 renderer.domElement.addEventListener('pointerup', (e) => {
@@ -1038,10 +1064,19 @@ renderer.domElement.addEventListener('pointerup', (e) => {
   downPos = null;
   if (moved > 6) return; // 拖动不算点击
 
-  // 地球模式：点地标即选中，地球会自动转到让该地点正面朝前（见 selectSite）
+  // 地球模式：先拾地标，没点中再按经纬度落省份
   if (state.earth) {
     const gid = pickGlobe(e);
-    if (gid) selectSite(gid);
+    if (gid) { selectSite(gid); return; }
+    /* 地球模式下没有 hoverTargets（省份网格在地图档才存在），
+       所以 raycaster.intersectObjects(map.hoverTargets) 不会命中。
+       改为：拾取地球表面拿经纬度，再用 CHINA_GEO 的点-多边形判定找省份。 */
+    const ll = globeLonLatAt();
+    if (!ll) { ui.hideRegionBar(); return; }
+    const info = provinceAt(ll[0], ll[1]);
+    if (!info.code) { ui.hideRegionBar(); return; }
+    const mesh = map.hoverTargets.find((m) => m.userData.adcode === info.code);
+    if (mesh) focusProvince(mesh);
     return;
   }
 
@@ -1192,6 +1227,10 @@ const ui = new UI({
       frameRoute(stops);
     }
   },
+  /* 底部诗词条一收，省份的选中态也要一起清 —— 否则会出现「列表没了、那块地还亮着」，
+     用户会以为列表是被误关的。收起的入口有四个（点空白 / 点 × / 切模式 / 进练习），
+     统一走 hideRegionBar 这一个出口，比在四处各写一遍可靠。 */
+  onHideRegion: () => clearProvinceSelection(),
   onClearRoute: () => {
     state.routeFocus = null;
     state.activeRoute = null;
@@ -1343,13 +1382,17 @@ document.addEventListener('keydown', (e) => {
 function updateProvinces(dt) {
   map.provinces.forEach((m) => {
     const u = m.userData;
+    /* 悬停（瞬时）与选中（留住）都算「高亮」：悬停是鼠标正指着的那块，
+       选中是点过的那块 —— 两者都要抬起 + 变色 + 点亮边界线，否则鼠标一移开
+       就不知道自己刚才点的是哪里。 */
+    const active = u.hovered || u.selected;
     // 2D 平面模式下不做抬升，否则地形一被「点起来」就破坏了平面观感
-    const targetLift = (u.hovered && !state.flat) ? 0.22 : 0;
+    const targetLift = (active && !state.flat) ? 0.22 : 0;
     u.lift += (targetLift - u.lift) * Math.min(1, dt * 9);
     m.position.y = state.flat ? 0 : u.lift;
     const mats = Array.isArray(m.material) ? m.material : [m.material];
     const top = mats[0];
-    if (u.hovered) {
+    if (active) {
       top.color.lerp(new THREE.Color('#ffe0a0'), Math.min(1, dt * 8));
       top.emissive.lerp(new THREE.Color('#8a6a20'), Math.min(1, dt * 8));
       top.emissiveIntensity += (1.4 - top.emissiveIntensity) * Math.min(1, dt * 8);
@@ -1358,6 +1401,23 @@ function updateProvinces(dt) {
       top.emissive.lerp(u.baseColor.clone().multiplyScalar(0.22), Math.min(1, dt * 6));
       top.emissiveIntensity += (0.55 - top.emissiveIntensity) * Math.min(1, dt * 6);
     }
+    /* 边界线（省份 mesh.add(lineMesh) 那一层）跟着 mesh 一起被 m.position.y 抬走，
+       这里再联动「hover 时边界线变亮、增亮、未 hover 时回到原色」——
+       否则 hover 抬起的省份与没抬起的省份之间的边界线没有视觉变化，
+       用户看不出「被选中的是哪一块」。颜色用饱和橙金 #ffb84a（与未 hover
+       时的 #e8c07a 拉开足够的对比度 —— 之前试过 #ffd07a 太接近，淡金 lerp
+       到淡金肉眼分不出来）。 */
+    m.children.forEach((c) => {
+      if (!c.userData?.isBorder) return;
+      const mat = c.material;
+      if (active) {
+        mat.color.lerp(new THREE.Color('#ffb84a'), Math.min(1, dt * 10));
+        mat.opacity += (0.95 - mat.opacity) * Math.min(1, dt * 10);
+      } else {
+        mat.color.lerp(c.userData.baseColor || new THREE.Color(0xe8c07a), Math.min(1, dt * 6));
+        mat.opacity += ((c.userData.baseOpacity ?? 0.4) - mat.opacity) * Math.min(1, dt * 6);
+      }
+    });
   });
 }
 

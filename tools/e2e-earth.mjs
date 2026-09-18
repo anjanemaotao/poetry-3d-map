@@ -63,6 +63,8 @@ R.push(...evalScript('e2e-earth.js'));
    脚本会让 agent-browser 的 daemon 撞 EAGAIN（"Resource temporarily unavailable"）。
    两次小批量 eval 之间 daemon 有喘息窗口，错误概率降到接近 0。 */
 R.push(...evalScript('e2e-earth-extras.js'));
+/* 第 12 节（点选 ripple 闸门 + 地球档点省份识别）同上：单文件太长会撞 EAGAIN。 */
+R.push(...evalScript('e2e-earth-extras2.js'));
 
 R.forEach((x) => console.log(`${x.pass ? '✓' : '✗'} ${x.name}${x.extra ? '  —— ' + x.extra : ''}`));
 const pass = R.filter((x) => x.pass).length;

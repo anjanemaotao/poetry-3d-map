@@ -542,6 +542,36 @@ poetry-3d-map/
   修法：所有「A 视图是装饰、B 视图不该出现」的层，visibility 公式都是
   `user_toggle && view_compatible`（河流：`!state.earth`，云海同理）。
   这条要在**所有**写 visibility 的入口都加 view-mode 闸门，不能只加在视图切换那一处。
+- **「ripple 是直接 add 到 scene 的」是隐藏陷阱**。涟漪在 `effects.ripple(siteId)`
+  里 `this.scene.add(mesh)`，**不在** `beaconGroup` 下 —— 所以
+  `applyEarthMode` 设的 `beaconGroup.visible = false` 拦不住它，
+  ripple 按地图档坐标创建（RingGeometry 0.2~0.3 世界单位 ≈ 一个省份直径），
+  落到地球档上位置甩到地球外 + 6 倍放大 → 用户看到的「位置不对的大光环」。
+  修法：`effects.setMode` 扩成 `'3d' | 'flat' | 'earth'`，earth 模式清空 ripple 数组；
+  `setSelected` 加 `this.mode !== 'earth'` 闸门拦截新 ripple 创建。
+  这一类**「父 group 隐藏拦不住」**的陷阱不止 ripple —— 任何**绕开父 group 直接 add
+  到 scene** 的临时装饰都得在视图切换时主动清，否则会跨模式乱串。
+- **地球档「点空白处」也得能命中省份**。原来 `pointerup` 地球档直接 return，
+  但用户从地图档的习惯里带着「点哪都行」的预期。修法：地球档下没点中地标时
+  走 `globeLonLatAt() → provinceAt() → map.hoverTargets 找 mesh → focusProvince`。
+  `map.hoverTargets` 在地球档不可见但 userData 仍可用，省钱 cosmetica。
+- **省份「选中」≠「hover」**。这是两层独立状态：
+  - `userData.hovered` 是鼠标正指着（瞬时），`updateProvinces` 拿来抬升 + 变色；
+  - `userData.selected` 是点过的（要留住），哪怕鼠标已经移到诗词卡片上
+    那一块也得保持抬起 + 边界线橙金 + 不透明度 0.95，否则「我点的是哪一块」会丢。
+  两个状态在 `updateProvinces` 里**合并判断**：`const active = u.hovered || u.selected`，
+  抬升 / 顶面色 / 边界线都跟着 `active` 走。
+  早期 focusProvince 写成 `m.userData.hovered = m.adcode === u.adcode`（漏了 userData），
+  Mesh 上没有 adcode 字段，恒为 undefined —— 这一句把**所有**省份的高亮都置成 false，
+  点了省份高亮反而当场熄灭；并且即使没这个 bug，hovered 也是瞬时的（鼠标一走就灭），
+  同样看不出「点中」。修法：focusProvince 写 `m.userData.selected = m.userData.adcode === u.adcode`，
+  收起诗词条时 `ui.hideRegionBar` → `ctx.onHideRegion` 把 selected 清掉。
+- **省份边界线必须挂在各省 mesh 下跟随 lift**。早先挂在 root 直属的 `borderGroup` 里，
+  省份 hover 抬升 0.22 时线留在原地，抬起来的那块与地面之间裂出一道缝；
+  改成 `mesh.add(lineMesh)` 才跟着走。同时各省份 `borderMat.clone()` 拿到独立材质实例，
+  否则 lerp 会串台：点亮一个省，全省边界线一起变橙 —— 等于没有选中效果。
+  选中态颜色用饱和橙金 `#ffb84a`（与未 hover 的 `#e8c07a` 拉开对比度），
+  早期试过 `#ffd07a` 太接近，淡金 lerp 到淡金肉眼根本分不出来。
 
 ### 负向验证
 
@@ -669,12 +699,12 @@ node tools/coverage.mjs     # 教材覆盖率应为 100%
 ```bash
 cd poetry-3d-map
 python3 serve.py &                  # 先起静态服务器
-node tools/e2e-all.mjs              # 功能回归：一个视口（1440×900）跑三套注入脚本（201 项）
+node tools/e2e-all.mjs              # 功能回归：一个视口（1440×900）跑三套注入脚本（214 项）
 node tools/e2e-layout.mjs           # 布局巡检：八个视口量重叠 / 溢出 / 元素宽度
 node tools/e2e-a11y.mjs             # 键盘回归：发真实按键量 Tab 顺序与焦点（35 项）
 node tools/e2e-bubbles.mjs          # 气泡层回归：16 条行迹逐条量气泡数 / 不重叠 / 不出界 / 停靠左右 / 出线方向 / 有内容
 node tools/e2e-zoom.mjs             # 缩放回归：滚轮放大时标记屏幕尺寸是否恒定 + HUD 精度是否随缩放提升（24 项）
-node tools/e2e-earth.mjs            # 地球模式回归：进出恢复 / 球面起伏 / 地标 / 领土要素 / 相机 / 近裁剪面像素判据 / 球面行迹 / 地球地名标注 / 右键拖动（104 项）
+node tools/e2e-earth.mjs            # 地球模式回归：进出恢复 / 球面起伏 / 地标 / 领土要素 / 相机 / 近裁剪面像素判据 / 球面行迹 / 地球地名标注 / 右键拖动 / 点选 ripple 闸门 / 地球档点省份识别（118 项）
 ```
 
 **为什么不是一套**：它们回答的是六个不同的问题 ——
@@ -714,7 +744,7 @@ agent-browser close
 | `e2e-scene.js` | 3D 地标数与位置、详情面板全量渲染 245 首诗篇、竖横排切换、三种练习、巡游、行迹、图层与视角、跑完复位回 3D 并关掉自动旋转、快捷键说明弹窗（按钮开关 / `?` 键开关 / Esc 关 / 焦点移进移出 / Tab 困在弹窗 / 点遮罩关 / 焦点归还）（66 项） |
 | `e2e-region.js` | 抽屉开关收起后仍可见可点、点击省份 → 地区介绍 + 底部诗词条、诗词详情弹窗（内容完整性 + 3 条关闭路径）、2D 平面切换（落点圆点 / 光圈收起 / 标签左对齐）、**三视图互斥**（2D ↔ 地球互切、近裁剪面切档）、行迹聚焦只留本行迹站点、气泡停靠左右两条空白带且出线方向朝向锚点、地区介绍与诗词条跟随可见性同步、浮层互不遮挡、三种练习的卡片布局与让位（115 项） |
 | `e2e-zoom.js` | 逐站点补偿基准已注入、向内可拉近 ≥10 倍、默认视角补偿系数恒为 1、拉到最近后光柱/光圈屏幕尺寸变化 ≤±25%、关掉补偿则本会涨 ≥3 倍（负向）、视域收窄到 1/8 以下、HUD 读数随缩放 2→3→4 位（24 项） |
-| `e2e-earth.js` | 进出地球模式的显隐与恢复（地图/光柱/云海/标注/极角/平移/缩放上限/近裁剪面/HUD 说明）、球面顶点数与高程起伏、珠峰 vs 华北平原高度差、79 个地标贴球面且方位与经纬度一致、诗境全在中国疆域内、中国版图含台湾省与南海诸岛、默认视角看全整颗地球且中国朝前、可见跨度（164° → 12.6°）、拖动转球、缩放上下限、**拉近后中心像素仍是地球**（近裁剪面）、地标屏幕尺寸不随缩放变大、点击地标选中并转到正面、退出后逐项还原、**球面行迹**（贴地大圆航线 / 管径量级 / 无 NaN 顶点 / 序号牌贴站点 / 行迹聚焦与拾取 / 切 2D 与 3D 时整条重建）（92 项，含 5 条负向验证）。第 10 节另起 `e2e-earth-extras.js`：**地球地名标注**（默认太空视角隐藏 / 拉近后冒出 / 距离闸门 ≈ 3.4 / 图层开关 / 近半球剔除）+ **右键拖动**（RIGHT 绑 ROTATE / 拖动后方位角真的转 / 浏览器右键菜单被拦截 / 退出地球后还原 PAN）（12 项） |
+| `e2e-earth.js` | 进出地球模式的显隐与恢复（地图/光柱/云海/标注/极角/平移/缩放上限/近裁剪面/HUD 说明）、球面顶点数与高程起伏、珠峰 vs 华北平原高度差、79 个地标贴球面且方位与经纬度一致、诗境全在中国疆域内、中国版图含台湾省与南海诸岛、默认视角看全整颗地球且中国朝前、可见跨度（164° → 12.6°）、拖动转球、缩放上下限、**拉近后中心像素仍是地球**（近裁剪面）、地标屏幕尺寸不随缩放变大、点击地标选中并转到正面、退出后逐项还原、**球面行迹**（贴地大圆航线 / 管径量级 / 无 NaN 顶点 / 序号牌贴站点 / 行迹聚焦与拾取 / 切 2D 与 3D 时整条重建）（92 项，含 5 条负向验证）。第 10 节另起 `e2e-earth-extras.js`：**地球地名标注**（默认太空视角隐藏 / 拉近后冒出 / 距离闸门 ≈ 3.4 / 图层开关 / 近半球剔除）+ **右键拖动**（RIGHT 绑 ROTATE / 拖动后方位角真的转 / 浏览器右键菜单被拦截 / 退出地球后还原 PAN）（12 项）。第 12 节另起 `e2e-earth-extras2.js`：**地球档点选不再创建 ripple**（setMode('earth') 清空 + setSelected 闸门拦截 + 退出地球后 ripple 模式恢复，5 项）+ **地球档点空白处也能命中省份**（globeLonLatAt → provinceAt → focusProvince）。第 8 节 `e2e-region.js` 补：省份选中态（selected/hover 双状态）联动地形抬升 / 边界线颜色 / 边界线透明度，边界线挂在各省 mesh 下跟随 lift，材质独立实例不串台。
 
 这些脚本都以「渲染结果」为准：判定弹层关闭看 `getComputedStyle(el).display === 'none'`，
 判定详情面板渲染看 `#detailBody .poem-body .vline` 的实际条数是否等于该诗的行数，

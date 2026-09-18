@@ -151,11 +151,20 @@ export class Effects {
    * 拾取柱体（hit）两种模式都留着：它是不可见的，且俯视下正好是一个小圆盘，
    * 「点圆点能选中」这条路径不该因为换模式而失效。
    */
+  /**
+   * 视图模式开关：'3d' = 三维探索 / 俯视地图；'flat' = 2D 平面；
+   * 'earth' = 地球模式。地球模式下所有 3D 装饰（光柱 / 灯球 / 光晕 / 地面光圈）
+   * 全部收起，ripple 也清空 —— 它们用地图档的 Albers 坐标创建（世界单位 0.2~0.3
+   * 约等于一个省份），落到半径 1 的球面上位置错乱、尺寸放大几倍后正好是用户
+   * 报的「大光环 + 位置不对」；而且 ripple 是直接 add 到 this.scene（不在
+   * beaconGroup 下），applyEarthMode 设的 beaconGroup.visible=false 拦不住，
+   * 所以必须在 setMode 里主动清掉。
+   */
   setMode(mode) {
-    const m = mode === 'flat' ? 'flat' : '3d';
+    const m = mode;
     this.mode = m;
     this.flat = m === 'flat';
-    const is3d = m === '3d';
+    const is3d = m === '3d';   // 只有 3D 探索档显示光柱 / 灯球 / 地面光圈
     this.beacons.forEach((b) => {
       b.column.visible = is3d;
       b.lantern.visible = is3d;
@@ -164,6 +173,14 @@ export class Effects {
       b.dot.visible = !is3d;
       b.rim.visible = !is3d;
     });
+    if (m === 'earth') {
+      while (this.ripples.length) {
+        const r = this.ripples.pop();
+        this.scene.remove(r.mesh);
+        r.mesh.geometry.dispose();
+        r.mesh.material.dispose();
+      }
+    }
   }
 
   /** 兼容旧签名（外部脚本 / 调试钩子仍按 on/off 调用） */
@@ -285,7 +302,9 @@ export class Effects {
 
   setSelected(siteId) {
     this.beacons.forEach((b, id) => { b.selected = id === siteId; });
-    if (siteId) this.ripple(siteId);
+    /* 地球模式下不调 ripple：ripple 用地图档坐标创建，落到地球档位置错乱 + 尺寸失真。
+       setMode('earth') 已经清空存量 ripple，这里再拦截新创建的入口。 */
+    if (siteId && this.mode !== 'earth') this.ripple(siteId);
   }
 
   /** 选中涟漪：一圈扩散的水墨波 */
@@ -375,15 +394,28 @@ export class Effects {
     this.routeTube = tube;
     this._tubeComp = this.markerComp;
 
-    // 流动光点
-    const dotR = flat ? 0.045 : 0.055;
-    for (let i = 0; i < 10; i++) {
+    /* 流动光点：沿航线跑，给「这是一条路」一个方向感。
+       早先 0.045（2D）/ 0.055（3D）半径 + 纯白加色混合 —— 在地图档拉近后
+       屏幕直径约 35~40px，9 个站点挤在 200px 横向范围里就变成一团白色棉花，
+       看着不像「方向感」只剩「一团光」。改成「行迹色 + 半径 0.020（2D）/ 0.025（3D）
+       + 18 个 + 透明度从 0.85 衰减到 0.15」：颜色融进航线、光点更小更密、尾迹淡出
+       —— 这才像一条「流淌的路」，而不是「几团棉花」。与 globe.js 同款设计。 */
+    const dotR = flat ? 0.020 : 0.025;
+    const dotCount = 18;
+    const dotColor = new THREE.Color(route.color);
+    for (let i = 0; i < dotCount; i++) {
+      const fade = 1 - i / dotCount;
+      const opacity = 0.15 + 0.70 * fade;
       const dot = new THREE.Mesh(
-        new THREE.SphereGeometry(dotR, 10, 8),
-        new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.95 - i * 0.08, blending: THREE.AdditiveBlending, depthWrite: false }),
+        new THREE.SphereGeometry(dotR, 8, 6),
+        new THREE.MeshBasicMaterial({
+          color: dotColor, transparent: true, opacity,
+          blending: THREE.AdditiveBlending, depthWrite: false,
+        }),
       );
+      dot.renderOrder = 3;       // 底衬 1 → 航线 2 → 光点 3 → 序号牌 4
       group.add(dot);
-      this.routeDots.push({ mesh: dot, offset: i / 10 });
+      this.routeDots.push({ mesh: dot, offset: i / dotCount });
     }
 
     // 站点序号牌
