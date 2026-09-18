@@ -141,7 +141,7 @@
     await sleep(900);
     $('[data-mode="route"]').click();
     await sleep(900);
-    $('#routeList .route-item').click();
+    $('#routePoetMenu .route-item').click();
     await sleep(3500);
     const riversGroup = () => app.scene.children.find((c) => c.type === 'Group' && c.children.length === 3);
     rec('3D + 行迹状态下河流层可见（默认 state.layers.rivers = true）',

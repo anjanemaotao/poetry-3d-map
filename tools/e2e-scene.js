@@ -131,7 +131,7 @@
   /* ---------- 10. 行迹 ---------- */
   $('#modeNav button[data-mode="route"]').click(); await sleep(200);
   rec('行迹：面板打开', vis($('#routePanel')));
-  const items = $$('#routeList .route-item');
+  const items = $$('#routePoetMenu .route-item');
   rec('行迹：诗人列表非空（≥6 条）', items.length >= 6, String(items.length));
   let bad = [];
   for (const it of items) {

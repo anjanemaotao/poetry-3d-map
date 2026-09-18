@@ -234,6 +234,16 @@ document.addEventListener('DOMContentLoaded', function () {
   <span class="pt-arrow">›</span><span class="pt-label">诗 词 详 情</span>
 </button>
 
+<!-- 行迹面板的收起 / 展开开关。
+     只在行迹模式下出现（此时 #toggleLeft 已随 #leftPanel 一起隐藏，两者不会打架）。
+     窄屏下选完诗人会自动收起行迹面板，把地图让出来 —— 若没有这个开关，
+     用户想再看一眼行迹详情就只能退出行迹模式，等于「选了诗人反而回不去」。
+     与左右两栏同一套做法：按钮在面板外、fixed 定位、位置由 JS 按面板实际宽度算。 -->
+<button class="panel-toggle" id="toggleRoute" title="收起 / 展开诗人行迹面板" aria-label="收起或展开诗人行迹面板"
+        aria-controls="routePanel" aria-expanded="true">
+  <span class="pt-arrow">‹</span><span class="pt-label">行 迹</span>
+</button>
+
 <!-- 窄屏覆盖式抽屉的遮罩：点它收起抽屉。
      宽屏下两栏是并排的常驻工具，地图仍占着中间的空白区，不需要遮罩；
      窄屏下两栏变成盖在地图上的抽屉，才需要这层「点空白处收起」的出口。 -->
@@ -261,14 +271,26 @@ document.addEventListener('DOMContentLoaded', function () {
   <div class="divider" data-page-node-id="DXdMzZuaNA8CgYGqTjyB4m"></div>
   <div class="group tour" data-page-node-id="GLtPmwgkMywjCBDm2QsEQN">
     <button id="btnTour" class="primary" title="自动巡游所有诗境（空格）" data-page-node-id="xcp5VhjZVkm524swSzdG8T">▶ 巡游</button>
-    <select id="tourScope" title="巡游范围" data-page-node-id="jTdnKa3HF0krBbAFg9Larr">
-      <option value="filtered" data-page-node-id="fn2w1cEspZD6PnCRsevN9i">当前筛选结果</option>
-      <option value="all" data-page-node-id="EbArTbB3vjRAQYphhZooke">全部诗境</option>
-      <option value="tang" data-page-node-id="ku1SRTLi03ZzbMOXc0h2wE">唐诗之路</option>
-      <option value="song" data-page-node-id="vqDJqG2kr05YGNKzTS0UDv">宋词之境</option>
-      <option value="border" data-page-node-id="JVhchsUwy2pIF8Eovtdda0">边塞烽烟</option>
-      <option value="water" data-page-node-id="7r6gjykCu4aUi8k2Kc9IQc">江南水乡</option>
-    </select>
+    <!-- 巡游范围：自定义下拉。
+         原生 <select> 在窄屏由 OS 接管弹层，位置飘移 + 文字看不清 + 风格与暗色主题脱节。
+         改用自己的按钮 + 列表，方向朝上（bottombar 浮层不能往下顶），与项目统一玻璃质感。 -->
+    <div class="dd dd-up" id="tourScopeDD" data-page-node-id="pM5wK3HdG2cSba9tN8eRr7">
+      <button id="tourScopeBtn" class="dd-btn" type="button"
+        aria-haspopup="listbox" aria-expanded="false" title="巡游范围"
+        data-page-node-id="kT8nLp4wQ9xR2mY6vHcBjS">
+        <span class="dd-label" id="tourScopeLabel" data-page-node-id="wQ3vHcBjSkT8nLp4wR9xR2m">当前筛选结果</span>
+        <span class="dd-chev" aria-hidden="true" data-page-node-id="Y6vHcBjSkT8nLp4wR9xR2mY">▾</span>
+      </button>
+      <ul class="dd-menu hidden" id="tourScopeMenu" role="listbox"
+        data-page-node-id="pL4wR9xR2mY6vHcBjSkT8n">
+        <li role="option" class="dd-opt" data-value="filtered" tabindex="0" data-page-node-id="fn2w1cEspZD6PnCRsevN9i">当前筛选结果</li>
+        <li role="option" class="dd-opt" data-value="all" tabindex="0" data-page-node-id="EbArTbB3vjRAQYphhZooke">全部诗境</li>
+        <li role="option" class="dd-opt" data-value="tang" tabindex="0" data-page-node-id="ku1SRTLi03ZzbMOXc0h2wE">唐诗之路</li>
+        <li role="option" class="dd-opt" data-value="song" tabindex="0" data-page-node-id="vqDJqG2kr05YGNKzTS0UDv">宋词之境</li>
+        <li role="option" class="dd-opt" data-value="border" tabindex="0" data-page-node-id="JVhchsUwy2pIF8Eovtdda0">边塞烽烟</li>
+        <li role="option" class="dd-opt" data-value="water" tabindex="0" data-page-node-id="7r6gjykCu4aUi8k2Kc9IQc">江南水乡</li>
+      </ul>
+    </div>
     <span class="progress" data-page-node-id="NHwIzwBqL153Uw7GIgrrdp"><i id="tourProgress" data-page-node-id="WYDtLtcnMvW3xAvyToGOoc"></i></span>
     <span id="tourInfo" class="tour-info" data-page-node-id="HGGDWcMpP6ABpTPoTf9Mfm">待机</span>
   </div>
@@ -365,6 +387,19 @@ document.addEventListener('DOMContentLoaded', function () {
 <div id="routePanel" class="route-panel glass hidden" data-page-node-id="fhD2X65qI0t09cqvszpXMB">
   <div class="rp-head" data-page-node-id="YuT43xr2Bo9YEpZCIlqv2G">
     <span data-page-node-id="xqrahVsFtctAPkrC4zi8Th">诗人行迹</span>
+    <!-- 「选择诗人」下拉。原本是把 16 位诗人直接平铺在面板里，窄屏与详情抢空间，
+         而且「找诗人」要先扫一遍列表才知道有没有。改成下拉浮层：默认只露一个按钮，
+         点开才弹列表；选完自动收起，详情露出来。 -->
+    <div class="dd dd-down rp-dd" id="routePoetDD" data-page-node-id="qW7nLp4wR9xR2mY6vHcBj5">
+      <button id="routePoetBtn" class="dd-btn rp-poet-btn" type="button"
+        aria-haspopup="listbox" aria-expanded="false" title="选择诗人"
+        data-page-node-id="rT8nLp4wR9xR2mY6vHcBj7">
+        <span class="dd-label" id="routePoetLabel" data-page-node-id="sY6vHcBjSkT8nLp4wR9xR2m">选择诗人</span>
+        <span class="dd-chev" aria-hidden="true" data-page-node-id="tL4wR9xR2mY6vHcBjSkT8n">▾</span>
+      </button>
+      <ul class="dd-menu rp-pop hidden" id="routePoetMenu" role="listbox"
+        data-page-node-id="uR2mY6vHcBjSkT8nLp4wR9"></ul>
+    </div>
     <div class="rp-head-actions">
       <button class="bubble-toggle on" id="bubbleToggle" type="button"
         aria-pressed="true" title="隐藏 / 显示行迹气泡卡片"
@@ -375,7 +410,6 @@ document.addEventListener('DOMContentLoaded', function () {
       <button class="icon-btn" id="routeClose" data-page-node-id="5p6yJxheqzxTfs8vLgUwWH">✕</button>
     </div>
   </div>
-  <div class="rp-body" id="routeList" data-page-node-id="Fs7v4OIEYxNoYwUsbDo3qa"></div>
   <div class="rp-detail" id="routeDetail" data-page-node-id="L3zqN3cnKicdlamcIjx2cs"></div>
 </div>
 

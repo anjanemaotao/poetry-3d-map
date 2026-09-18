@@ -116,7 +116,7 @@
   await sl(300);
   rc($('[data-mode="route"]'));
   await sl(500);
-  const it = $('#routeList .route-item');
+  const it = $('#routePoetMenu .route-item');
   if (it) { rc(it); await sl(1800); }
   snap('行迹模式');
 

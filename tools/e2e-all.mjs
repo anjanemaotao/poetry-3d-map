@@ -10,30 +10,25 @@
  * 所以这里的核心纪律只有一条：**每套脚本跑之前重新导航（reload）页面**。
  * 脚本自身也各自做了结尾复位（如 e2e-scene 主动退回 3D），两道防线并存。
  *
+ * 第二条纪律（后来才补上）：**别把整个脚本塞进一次 eval**。
+ * 单次 eval 有等待上限，超了会报成 `os error 35 … daemon may be busy`，
+ * 看着像环境坏了，其实是脚本太长。统一走 runScript()（见 ab-run.mjs）派发 + 轮询。
+ *
  * 用法：
  *   node tools/e2e-all.mjs                    # 默认 http://127.0.0.1:8777/index.html
  *   E2E_URL=http://127.0.0.1:8777/index.html node tools/e2e-all.mjs
  * 前置：本地静态服务器已启动（serve.py），agent-browser 已安装。
  */
-import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { makeAb, runScript } from './ab-run.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const TARGET = process.env.E2E_URL || 'http://127.0.0.1:8777/index.html';
 const SUITES = ['e2e-search.js', 'e2e-scene.js', 'e2e-region.js'];
 
-const ab = (args) =>
-  execFileSync('agent-browser', args, { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
-
-/** agent-browser eval 的输出是 pretty-printed JSON，可能夹带提示行 —— 从首个 '[' 截到末个 ']' */
-function parseResult(out) {
-  const a = out.indexOf('[');
-  const b = out.lastIndexOf(']');
-  if (a < 0 || b < a) throw new Error('输出里找不到 JSON 数组：\n' + out.slice(0, 500));
-  return JSON.parse(out.slice(a, b + 1));
-}
+const ab = makeAb();
 
 let total = 0;
 let pass = 0;
@@ -52,11 +47,14 @@ for (const suite of SUITES) {
   ab(['wait', '3000']);
 
   let arr;
+  let ms = 0;
   try {
-    arr = parseResult(ab(['eval', fs.readFileSync(path.join(HERE, suite), 'utf8')]));
+    const res = runScript(ab, fs.readFileSync(path.join(HERE, suite), 'utf8'), { label: suite });
+    arr = res.R;
+    ms = res.ms;
   } catch (e) {
     console.log(`✗ ${suite.padEnd(16)} 执行失败：${e.message.split('\n')[0]}`);
-    failed.push({ suite, name: '(脚本执行失败)', extra: e.message.split('\n')[0] });
+    failed.push({ suite, name: '(脚本执行失败)', extra: e.message });
     total += 1;
     continue;
   }
@@ -66,7 +64,7 @@ for (const suite of SUITES) {
   pass += p;
   const bad = arr.filter((r) => !r.pass);
   bad.forEach((r) => failed.push({ suite, name: r.name, extra: r.extra }));
-  console.log(`${bad.length ? '✗' : '✓'} ${suite.padEnd(16)} ${String(p).padStart(3)} / ${arr.length}`);
+  console.log(`${bad.length ? '✗' : '✓'} ${suite.padEnd(16)} ${String(p).padStart(3)} / ${arr.length}  ${String((ms / 1000).toFixed(1)).padStart(5)}s`);
 }
 
 console.log('-'.repeat(46));
@@ -74,6 +72,13 @@ console.log(`合计 ${pass} / ${total}  ${pass === total ? '✅ 全部通过' : 
 
 if (failed.length) {
   console.log('\n失败明细：');
-  failed.forEach((f) => console.log(`  ✗ [${f.suite}] ${f.name}${f.extra ? '  —— ' + f.extra : ''}`));
+  failed.forEach((f) => {
+    /* 脚本执行失败的 extra 是完整堆栈（这正是走 runScript 换来的好处），
+       详情里只印第一行，完整堆栈单独摊开在后面。 */
+    const head = (f.extra || '').split('\n')[0];
+    console.log(`  ✗ [${f.suite}] ${f.name}${head ? '  —— ' + head : ''}`);
+  });
+  const stacks = failed.filter((f) => f.name === '(脚本执行失败)' && f.extra.includes('\n'));
+  stacks.forEach((f) => console.log(`\n── ${f.suite} 完整堆栈 ──\n${f.extra}`));
   process.exit(1);
 }

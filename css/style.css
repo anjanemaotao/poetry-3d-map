@@ -508,14 +508,20 @@ body.quiz-open .route-panel { bottom: calc(82px + var(--qc-h, 280px) + 12px); }
   transition: left .32s cubic-bezier(.4,0,.2,1), right .32s cubic-bezier(.4,0,.2,1),
               width .32s cubic-bezier(.4,0,.2,1), background .18s, color .18s, box-shadow .18s;
 }
-#toggleLeft { border-radius: 0 9px 9px 0; border-left: 0; }
+#toggleLeft, #toggleRoute { border-radius: 0 9px 9px 0; border-left: 0; }
 #toggleRight { border-radius: 9px 0 0 9px; border-right: 0; }
 .panel-toggle .pt-label { display: none; font-size: 10.5px; letter-spacing: 0.22em; writing-mode: vertical-rl; }
 .panel-toggle:hover { background: rgba(232,192,122,0.22); color: #fff; }
 
+/* 行迹开关只在行迹模式下露出来。
+   默认 display:none —— 非行迹模式下它管的面板本身就是隐藏的（.route-panel.hidden），
+   留一个点了没反应的按钮比不显示更糟。可见性由 ui.js 的 syncPanelToggles 切换。 */
+#toggleRoute { display: none; }
+
 /* 收起态：开关贴在屏幕边缘，加宽并显示竖排文字，保证一眼能找到 */
 body.hide-left #toggleLeft,
-body.hide-right #toggleRight {
+body.hide-right #toggleRight,
+body.hide-route #toggleRoute {
   width: 30px; height: 96px;
   background: linear-gradient(180deg, rgba(232,192,122,0.26), rgba(232,192,122,0.14));
   border-color: rgba(232,192,122,0.55);
@@ -523,14 +529,16 @@ body.hide-right #toggleRight {
   animation: toggleNudge 2.6s ease-in-out infinite;
 }
 body.hide-left #toggleLeft .pt-label,
-body.hide-right #toggleRight .pt-label { display: block; }
+body.hide-right #toggleRight .pt-label,
+body.hide-route #toggleRoute .pt-label { display: block; }
 @keyframes toggleNudge {
   0%, 100% { box-shadow: 0 0 16px rgba(232,192,122,0.22); }
   50% { box-shadow: 0 0 30px rgba(232,192,122,0.45); }
 }
 @media (prefers-reduced-motion: reduce) {
   .panel-toggle { transition: none; }
-  body.hide-left #toggleLeft, body.hide-right #toggleRight { animation: none; }
+  body.hide-left #toggleLeft, body.hide-right #toggleRight,
+  body.hide-route #toggleRoute { animation: none; }
 }
 
 .panel-scroll { flex: 1; overflow-y: auto; padding: 14px 14px 6px; }
@@ -718,6 +726,58 @@ body.hide-right #toggleRight .pt-label { display: block; }
   background: rgba(4,12,20,0.7); border: 1px solid var(--line-2); border-radius: 9px;
   font-size: 11.5px; padding: 6px 8px; cursor: pointer;
 }
+
+/* ---------- 自定义下拉（巡游范围 / 诗人选择） ----------
+   不用 <select> 的原因：原生 select 在窄屏由 OS 接管弹层，位置飘移、文字看不清、
+   风格与暗色主题脱节。这里所有「下拉」都收成同一组件，按钮 + 浮层，
+   方向由 JS 按可用空间现算（见 ui.bindDropdown），主题色与按钮一致。 */
+.dd { position: relative; display: inline-block; }
+.dd-btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: rgba(4,12,20,0.7); border: 1px solid var(--line-2);
+  border-radius: 9px; font: 500 11.5px var(--ui);
+  padding: 6px 10px; color: rgba(242,234,216,0.85); cursor: pointer;
+  letter-spacing: 0.04em;
+  min-width: 132px;       /* 与原生 <select> 在 bottombar 占的宽度看齐 —— 不至于比原来更窄 */
+  transition: background .16s, border-color .16s, color .16s;
+}
+.dd-btn:hover { background: rgba(232,192,122,0.10); border-color: rgba(232,192,122,0.45); }
+.dd-btn:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--bg-2), 0 0 0 4px var(--gold-2); }
+.dd-btn[aria-expanded="true"] { border-color: var(--gold-2); background: rgba(232,192,122,0.12); color: #ffe9bd; }
+/* 按钮上的文字要能截断：诗人名长短不一，撑破按钮会把 chev 挤出去 */
+.dd-btn .dd-label {
+  flex: 1; min-width: 0; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; text-align: left;
+}
+.dd-chev { font-size: 10px; opacity: 0.65; transition: transform .16s; display: inline-block; flex: none; }
+.dd-btn[aria-expanded="true"] .dd-chev { transform: rotate(180deg); }
+.dd-menu {
+  /* position: fixed 是关键 —— 不用 absolute 是因为 .dd 的祖先里有 overflow-x:auto
+     （如 .bottombar），CSS 规范规定一旦一个方向设了 auto/scroll/hidden，另一个方向
+     会被强制设成 auto 而不是 visible，结果下拉浮层向上溢出时被切掉，看不见。
+     改成 fixed + JS 在打开时按按钮 rect 算坐标，不受任何祖先 overflow 影响。 */
+  position: fixed;
+  margin: 0; padding: 6px;
+  list-style: none;               /* ul 的默认圆点：这些 li 是选项，不是列表项 */
+  box-sizing: border-box;
+  background: rgba(8, 16, 28, 0.96);
+  border: 1px solid rgba(232,192,122,0.35);
+  border-radius: 10px;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+  display: flex; flex-direction: column; gap: 2px;
+  z-index: 50;
+  max-width: calc(100vw - 16px);  /* 再宽也不许溢出视口（窄屏由 JS 夹住 left） */
+}
+/* 方向翻转：早期放在 .dd-up/.dd-down 选择器里，但 portal 之后菜单
+   脱离了 .dd-up 父元素，那个选择器选不到。直接由 JS 写到 inline style。 */
+.dd-opt {
+  padding: 7px 11px; border-radius: 6px; cursor: pointer;
+  font-size: 12px; color: rgba(242,234,216,0.85);
+  white-space: nowrap; transition: background .14s, color .14s;
+  list-style: none;
+}
+.dd-opt:hover, .dd-opt:focus-visible { background: rgba(232,192,122,0.15); color: #ffe9bd; outline: none; }
+.dd-opt.selected { background: rgba(232,192,122,0.22); color: #ffe9bd; }
 .progress { width: 66px; height: 4px; border-radius: 2px; background: rgba(255,255,255,0.12); overflow: hidden; }
 .progress i { display: block; height: 100%; width: 0%; background: linear-gradient(90deg, var(--jade), var(--gold)); transition: width .3s; }
 .tour-info { font-size: 11px; color: rgba(242,234,216,0.55); min-width: 128px; white-space: nowrap; }
@@ -861,21 +921,35 @@ body.hide-right #toggleRight .pt-label { display: block; }
 .route-panel {
   position: fixed; left: 16px; top: 88px; bottom: 96px; width: 276px; z-index: 38;
   display: flex; flex-direction: column; overflow: hidden;
-  transition: bottom .3s ease;
+  transition: bottom .3s ease, transform .32s cubic-bezier(.4,0,.2,1);
 }
+/* 收起态。与左右两栏同一套 translateX 机制（`.panel.collapsed`），
+   多平移 24px 是为了让 16px 的左边距与面板阴影也一起退出视口。
+   注意 #toggleRoute 必须留在面板**外面** —— transform 会建立新的包含块，
+   开关若在面板里会跟着一起飞出去（这正是左右两栏当初踩过的坑）。 */
+.route-panel.collapsed { transform: translateX(calc(-100% - 24px)); }
 /* 与左右两栏同理：底部诗词条打开时让出高度。
    行迹面板是独立类，不受 .panel 那条让位规则覆盖 —— 漏掉它就会「行迹模式下点省份，
    诗词条压住站点列表」。 */
 body.rb-open .route-panel { bottom: calc(96px + var(--rb-h, 176px)); }
 /* 隐藏统一由文件顶部的 .hidden 工具类负责 */
+/* 头部两行布局：
+   行 1 「诗人行迹」标题
+   行 2 「选择诗人 ▾」下拉按钮（占满宽度，避免「选择诗人」+ chev 被挤成 78px）
+   行 3 气泡开关 + ✕
+   三行而不是把按钮塞中间，是因为面板只有 276px 宽，三个元素挤一行谁都不好看。
+   （16 位诗人的列表已经收进下拉浮层，不再常驻占位。） */
 .rp-head {
-  display: flex; align-items: center; justify-content: space-between;
-  padding: 12px 14px; border-bottom: 1px solid rgba(255,255,255,0.08);
+  display: flex; flex-direction: column;
+  padding: 10px 12px;
+  gap: 8px;
+  border-bottom: 1px solid rgba(255,255,255,0.08);
+}
+.rp-head > span {
   font-size: 12px; letter-spacing: 0.2em; color: var(--gold-2);
 }
-/* 头部右侧两个按钮（气泡开关 + ✕）的容器 —— justify-content 留着，
-   把开关挤到标题和关闭按钮之间 */
-.rp-head > span { flex: 1; }
+.rp-dd { width: 100%; }
+.rp-dd .dd-btn { width: 100%; justify-content: space-between; }
 .rp-head-actions { display: flex; align-items: center; gap: 8px; }
 
 /* 气泡开关：圆形小点 + 「气泡」两字。状态由 .on / .off 切换。
@@ -906,7 +980,15 @@ body.rb-open .route-panel { bottom: calc(96px + var(--rb-h, 176px)); }
   background: rgba(242, 234, 216, 0.25);
   box-shadow: none;
 }
-.rp-body { overflow-y: auto; padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; }
+.rp-pop {
+  /* 复用 .dd-menu 的玻璃质感（背景 / 边框 / 阴影）。
+     位置由 JS 在打开时按按钮 rect 算（position: fixed，避免被 route-panel 任何
+     overflow 裁掉）。max-height 用 vh：窄屏面板只有 56vh，再留余量给详情。 */
+  max-height: 56vh;
+  padding: 10px 12px;
+  display: flex; flex-direction: column; gap: 6px;
+  overflow-y: auto;
+}
 .route-item {
   border: 1px solid transparent; border-radius: 10px; padding: 9px 11px; cursor: pointer; transition: all .16s;
 }

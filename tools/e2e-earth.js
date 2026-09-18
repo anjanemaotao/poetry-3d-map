@@ -477,7 +477,7 @@
        断言口径直接量**几何本身**（半径、管径、序号牌贴地半径），不读意图字段。 */
     q('[data-mode="route"]').click();
     await sleep(700);
-    const rItem = q('#routeList .route-item');
+    const rItem = q('#routePoetMenu .route-item');
     if (!rItem) {
       rec('行迹列表有内容（地球行迹的前置）', false, '列表为空');
     } else {
@@ -580,8 +580,25 @@
         pxB0 != null && pxB1 != null && Math.abs(pxB1 / pxB0 - 1) < 0.25,
         `${pxB0 == null ? '?' : pxB0.toFixed(1)}px → ${pxB1 == null ? '?' : pxB1.toFixed(1)}px`);
 
+      /* 行迹聚焦在地球上：被聚焦的站点由**序号牌**代表，地标必须收起。
+         地标是加色混合的白色光晕，比序号牌还大一圈，又被泛光再放大一次 ——
+         留在地标位就整片糊住数字（这正是「行迹序号看不清」的成因）。
+         所以这里断言的是「0 个地标 + 站数块序号牌」，而不是「剩 9 个地标」。 */
       const visM = app.globe.markers.filter((m) => m.sprite.visible).length;
-      rec('行迹聚焦在地球上也生效（只留行迹上的地标）', visM === nStops, `${visM} / ${nStops}`);
+      const badgeIds = new Set(app.globe.routeBadges.map((b) => b.siteId));
+      rec('行迹聚焦在地球上也生效（地标让位给序号牌：0 个地标 + 站数块序号牌）',
+        visM === 0 && badgeIds.size === nStops,
+        `地标 ${visM} 个 · 序号牌 ${badgeIds.size} / ${nStops}`);
+
+      /* 序号牌取代地标的前提是**它就落在站点自己的位置上**。
+         量三维距离：序号牌贴在站点正上方 0.016 个地球半径处，
+         地标贴 0.0035 —— 两者相差 0.0125，远小于站间距离。 */
+      const worstD = Math.max(...app.globe.routeBadges.map((b) => {
+        const m = app.globe.markers.find((x) => x.site.id === b.siteId);
+        return m ? b.sprite.position.distanceTo(m.sprite.position) : 0;
+      }));
+      rec('序号牌就落在站点地标的位置上（取代地标不丢位置）', worstD < 0.05,
+        `最大偏差 ${worstD.toFixed(4)} 个地球半径`);
 
       /* 负向验证：清掉聚焦集合，79 个地标必须全部回来 ——
          否则上面那条可能是「本来就只有 9 个可见」的恒真断言。 */

@@ -10,14 +10,14 @@
  *   node tools/e2e-earth.mjs
  * 前置：本地静态服务器已启动（serve.py），agent-browser 已安装。
  */
-import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { makeAb, runScript } from './ab-run.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const TARGET = process.env.E2E_URL || 'http://127.0.0.1:8777/index.html';
-const ab = (args) => execFileSync('agent-browser', args, { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+const ab = makeAb();
 
 function evalValue(js) {
   const out = ab(['eval', js]).trim();
@@ -46,24 +46,16 @@ function freshPage() {
 
 freshPage();
 
-const evalScript = (file) => {
-  const out = ab(['eval', fs.readFileSync(path.join(HERE, file), 'utf8')]);
-  const a = out.indexOf('[');
-  const b = out.lastIndexOf(']');
-  if (a < 0 || b < a) {
-    console.error('✗ 输出里找不到 JSON 数组：\n' + out.slice(0, 800));
-    process.exit(1);
-  }
-  return JSON.parse(out.slice(a, b + 1));
-};
+const evalScript = (file) =>
+  runScript(ab, fs.readFileSync(path.join(HERE, file), 'utf8'), { label: file }).R;
 
 const R = [];
+/* 三段分文件保留 —— 它们各自是独立的主题（主流程 / 地名标注+右键拖动 / 点选闸门），
+   分开跑出问题时定位更快。但**不再**依赖「分文件给 daemon 喘息窗口」这个说法了：
+   当年撞的 EAGAIN 不是窗口不够，而是单次 eval 有等待上限，脚本一长必超
+   （详见 ab-run.mjs 顶部）。现在走 runScript 派发 + 轮询，合并成一段也不会超时。 */
 R.push(...evalScript('e2e-earth.js'));
-/* 第 10 节（地名标注 + 右键拖动）拆到独立文件后单独 eval —— 一口气跑完全部
-   脚本会让 agent-browser 的 daemon 撞 EAGAIN（"Resource temporarily unavailable"）。
-   两次小批量 eval 之间 daemon 有喘息窗口，错误概率降到接近 0。 */
 R.push(...evalScript('e2e-earth-extras.js'));
-/* 第 12 节（点选 ripple 闸门 + 地球档点省份识别）同上：单文件太长会撞 EAGAIN。 */
 R.push(...evalScript('e2e-earth-extras2.js'));
 
 R.forEach((x) => console.log(`${x.pass ? '✓' : '✗'} ${x.name}${x.extra ? '  —— ' + x.extra : ''}`));

@@ -65,6 +65,10 @@ export class Effects {
     this.routeTubeBase = 0.026;
     this.routeBadges = [];   // 行迹站点序号牌（Sprite），需按缩放改 scale
     this.routeMode = '3d';   // 建这条行迹时用的视图模式（决定抬升与序号样式）
+    /* 当前行迹覆盖的站点 id。这些站点在 2D 下的「落点圆点」要被序号牌取代 ——
+       两者锚在同一个坐标上，圆点会从序号牌的半透明圆底里透上来，
+       把数字糊成一团（见 _applyDotVisibility）。 */
+    this.routeStationIds = new Set();
     this._tubeComp = 1;
     this._fwd = new THREE.Vector3();   // 复用：相机朝向
     this._tmp = new THREE.Vector3();   // 复用：临时向量，避免每帧分配
@@ -170,8 +174,7 @@ export class Effects {
       b.lantern.visible = is3d;
       b.halo.visible = is3d;
       b.ring.visible = is3d;
-      b.dot.visible = !is3d;
-      b.rim.visible = !is3d;
+      this._applyDotVisibility(b);
     });
     if (m === 'earth') {
       while (this.ripples.length) {
@@ -185,6 +188,31 @@ export class Effects {
 
   /** 兼容旧签名（外部脚本 / 调试钩子仍按 on/off 调用） */
   setFlatMode(on) { this.setMode(on ? 'flat' : '3d'); }
+
+  /**
+   * 2D 落点圆点（含深色描边）的显隐。
+   *
+   * 两条闸门，缺一不可：
+   *  1. **只有非 3D 档才显示**（3D 档用的是光柱 + 地面光圈）；
+   *  2. **行迹模式下，被行迹覆盖的站点不显示** —— 序号牌就是那个站点的标记。
+   *
+   * 第 2 条是「行迹序号看不清」的病根：序号牌与落点圆点锚在**同一个坐标**上，
+   * 而序号牌的圆底是半透明的（0.94），圆点又是纯色实心圆盘，于是圆点会从圆底里
+   * 透上来，在数字正中糊出一块亮斑 —— 实测长安那一站的「2」下半截就被糊掉了。
+   * 把圆点收起来，序号牌才真的「既是落点标记也是序号」（这正是 2D 行迹的设计意图）。
+   * 3D 档不受影响：那里圆点本来就不可见，序号牌悬在光柱顶端，与地面光圈不冲突。
+   */
+  _applyDotVisibility(b) {
+    const show = this.mode !== '3d' && !this.routeStationIds.has(b.site.id);
+    b.dot.visible = show;
+    b.rim.visible = show;
+  }
+
+  /** 行迹站点集合变了，重算一遍落点圆点的显隐 */
+  _syncRouteStations(ids) {
+    this.routeStationIds = new Set(ids || []);
+    this.beacons.forEach((b) => this._applyDotVisibility(b));
+  }
 
   /* ---------------- 地标 ---------------- */
   createBeacons(sites) {
@@ -340,6 +368,12 @@ export class Effects {
     this.routeTube = null;
     this.routeBadges = [];
     this.routeMode = this.mode;
+    /* 行迹没了，被它借走落点圆点的那些站点要把圆点还回来。
+       这一句曾经漏掉过（同一批编辑里静默失败），后果很隐蔽：
+       2D 下退出行迹后地图上少了一片圆点，而光柱、序号牌、面板全都正常，
+       只有量 `b.dot.visible` 才看得出来 —— 是 e2e-region 第 9 节的
+       「退出行迹 → 2D 下落点圆点全部回来」这条断言把它揪出来的。 */
+    this._syncRouteStations(null);
   }
 
   buildRoute(route) {
@@ -357,6 +391,10 @@ export class Effects {
     const mode = this.mode;
     this.routeMode = mode;
     const flat = mode === 'flat';
+    /* 2D 下这些站点的落点圆点要让位给序号牌（两者锚在同一点，圆点会透上来糊掉数字）。
+       放在这里而不是 setMode 里：站点集合是「这条行迹」的属性，不是视图的属性 ——
+       换诗人、退出行迹、切视图都要重算一遍。 */
+    this._syncRouteStations(stops.map((s) => s.siteId));
 
     const group = new THREE.Group();
     const color = new THREE.Color(route.color);
@@ -396,26 +434,53 @@ export class Effects {
 
     /* 流动光点：沿航线跑，给「这是一条路」一个方向感。
        早先 0.045（2D）/ 0.055（3D）半径 + 纯白加色混合 —— 在地图档拉近后
-       屏幕直径约 35~40px，9 个站点挤在 200px 横向范围里就变成一团白色棉花，
-       看着不像「方向感」只剩「一团光」。改成「行迹色 + 半径 0.020（2D）/ 0.025（3D）
-       + 18 个 + 透明度从 0.85 衰减到 0.15」：颜色融进航线、光点更小更密、尾迹淡出
-       —— 这才像一条「流淌的路」，而不是「几团棉花」。与 globe.js 同款设计。 */
+       屏幕直径约 35~40px，9 个站点挤在 200px 横向范围里就变成一团白色棉花。
+       改成「行迹色 + 半径 0.020（2D）/ 0.025（3D）+ 透明度从 0.85 衰减到 0.15」：
+       颜色融进航线、光点更小更密、尾迹淡出 —— 这才像一条「流淌的路」。
+
+       但还有个隐藏的脏点：dot 沿曲线等间距采样，offset = i/dotCount（0、1/18、2/18…），
+       当 stops 数与 dot 数不互素时（比如 9 站 / 18 点：2/18、4/18、6/18…正落在各站点上），
+       会有好几个 dot **正好落在站点位置**，与站点光圈 / 序号牌叠在一起被「洗白」，
+       看起来像每站都裹了一团白棉花 —— 2D 平面尤其明显（俯视投影下 dot 与站点完全重合）。
+       修法：先**沿曲线高密度采样，反查出每个站点在曲线上的归一弧长**，
+       再让 dot 严格落在每段 (s_k, s_{k+1}) 内部（i=1..dotsPerLeg 走 i/(dotsPerLeg+1)），
+       不再触碰端点位置。这样与站点不再有几何冲突，fade 也照样是「头亮尾淡」——
+       头（arc=0 附近）fade=1 最亮，尾（arc=1 附近）fade=0 最淡。 */
     const dotR = flat ? 0.020 : 0.025;
-    const dotCount = 18;
+    const dotsPerLeg = 3;
     const dotColor = new THREE.Color(route.color);
-    for (let i = 0; i < dotCount; i++) {
-      const fade = 1 - i / dotCount;
-      const opacity = 0.15 + 0.70 * fade;
-      const dot = new THREE.Mesh(
-        new THREE.SphereGeometry(dotR, 8, 6),
-        new THREE.MeshBasicMaterial({
-          color: dotColor, transparent: true, opacity,
-          blending: THREE.AdditiveBlending, depthWrite: false,
-        }),
-      );
-      dot.renderOrder = 3;       // 底衬 1 → 航线 2 → 光点 3 → 序号牌 4
-      group.add(dot);
-      this.routeDots.push({ mesh: dot, offset: i / dotCount });
+    /* 反查每个站点在曲线上的弧长：sample 步长足够细（200 段，9 站 ~ 22 段/站），
+       找到与站点三维位置最近的曲线点，误差 < 0.05 世界单位即可。 */
+    const ARC_SAMPLES = 200;
+    const arcAtStop = stops.map((s) => {
+      const target = s.site.group.position;
+      let best = 0, bestD = Infinity;
+      for (let i = 0; i <= ARC_SAMPLES; i++) {
+        const u = i / ARC_SAMPLES;
+        const v = curve.getPointAt(u);
+        const d = v.distanceToSquared(target);
+        if (d < bestD) { bestD = d; best = u; }
+      }
+      return best;
+    });
+    for (let k = 0; k < stops.length - 1; k++) {
+      const a = arcAtStop[k], b = arcAtStop[k + 1];
+      const span = b - a;
+      for (let i = 1; i <= dotsPerLeg; i++) {
+        const arc = a + (i / (dotsPerLeg + 1)) * span;
+        const fade = 1 - arc;            // 头亮尾淡：起点附近 fade ≈ 1、终点附近 fade ≈ 0
+        const opacity = 0.18 + 0.67 * fade;
+        const dot = new THREE.Mesh(
+          new THREE.SphereGeometry(dotR, 8, 6),
+          new THREE.MeshBasicMaterial({
+            color: dotColor, transparent: true, opacity,
+            blending: THREE.AdditiveBlending, depthWrite: false,
+          }),
+        );
+        dot.renderOrder = 3;       // 底衬 1 → 航线 2 → 光点 3 → 序号牌 4
+        group.add(dot);
+        this.routeDots.push({ mesh: dot, offset: arc });
+      }
     }
 
     // 站点序号牌
@@ -450,7 +515,12 @@ export class Effects {
     const ctx = cv.getContext('2d');
     ctx.beginPath();
     ctx.arc(s / 2, s / 2, 46, 0, Math.PI * 2);
-    ctx.fillStyle = 'rgba(8,16,26,0.82)';
+    /* 圆底要够实（0.94，与地球那份 numberTexture 同一取值）。
+       序号牌底下压着东西：2D 下是相邻省份的台面、加色混合的流动光点，
+       拉近后还可能压到明亮的雪线 / 黄土高原。留的每一分透明都会把那层漏上来，
+       数字对比度直接掉下去 —— 0.82 时长安那一站的「2」就被底下的圆点糊掉了下半截。
+       0.94 之后仍有玻璃感，但已经漏不出足以干扰读数的亮度。 */
+    ctx.fillStyle = 'rgba(8,16,26,0.94)';
     ctx.fill();
     ctx.lineWidth = 5;
     ctx.strokeStyle = '#' + new THREE.Color(color).getHexString();
