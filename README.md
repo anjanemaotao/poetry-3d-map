@@ -11,15 +11,40 @@
 
 ## 快速开始
 
-ES Module 无法在 `file://` 协议下加载，请用附带的本地服务器启动：
+ES Module 无法在 `file://` 协议下加载，请用附带的本地服务器启动。
+
+**方式一：双击图标（推荐）**
+
+| 双击 | 作用 |
+|---|---|
+| `启动.command` | 启动服务，就绪后自动打开浏览器（默认 `http://127.0.0.1:8777`） |
+| `停止.command` | 停止服务（按 pid 文件停，再用端口兜底） |
+
+两个脚本都**幂等**：服务已在跑时再点「启动」不会起第二个进程，直接开页面；
+服务没跑时点「停止」只提示一句，不报错。
+
+服务**脱离终端运行**（两级 fork + `setsid`）—— 关掉那个终端窗口不会把服务带走。
+`start.command` / `stop.command` 是同一套逻辑的英文名入口，命令行调用二者完全等价
+（中文名脚本只是转调它们，不复制逻辑，免得两份迟早改歪）。
+
+**方式二：命令行**
 
 ```bash
 cd poetry-3d-map
+./启动.command              # 或 ./start.command，默认 8777
+./启动.command 8080         # 换端口
+./停止.command              # 或 ./stop.command，可带端口参数
+```
+
+**方式三：前台直接跑**（日志直接打在眼前，`Ctrl+C` 停止）
+
+```bash
 python3 serve.py            # 默认 http://127.0.0.1:8777，会自动打开浏览器
 python3 serve.py 8080       # 指定端口
 ```
 
 打开后即可使用，**无需联网**（Three.js 与地图数据已全部本地化）。
+后台方式启动的日志写在 `.server.log`，进程号记在 `.server.pid`。
 
 ---
 
@@ -263,6 +288,10 @@ node tools/coverage.mjs --full   # 额外列出已覆盖篇目及其所在诗境
 poetry-3d-map/
 ├── index.html              界面结构（含 importmap）
 ├── serve.py                本地开发服务器（禁用缓存，自动开浏览器）
+├── 启动.command            双击启动服务（中文名入口，转调 start.command）
+├── 停止.command            双击停止服务（中文名入口，转调 stop.command）
+├── start.command           启动逻辑本体：脱离终端起服务 + 等端口就绪 + 开浏览器
+├── stop.command            停止逻辑本体：先按 pid 文件停，再用端口兜底
 ├── css/style.css           全部界面样式（玻璃拟态 / 金色朱砂配色）
 ├── js/
 │   ├── main.js             主程序：场景装配、交互、运镜、巡游、课堂联动

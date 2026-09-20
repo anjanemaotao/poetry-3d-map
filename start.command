@@ -47,7 +47,7 @@ for _ in $(seq 1 90); do
     echo "   地址：${URL}"
     echo "   日志：${LOGFILE}"
     open "$URL"
-    echo "   停止：双击 stop.command，或执行 ${DIR}/stop.command ${PORT}"
+    echo "   停止：双击「停止.command」（命令行：${DIR}/停止.command ${PORT}）"
     exit 0
   fi
   sleep 0.2
