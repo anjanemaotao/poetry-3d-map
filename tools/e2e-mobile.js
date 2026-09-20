@@ -215,6 +215,44 @@
           ? `${bubbles.length} 个，最左 ${Math.round(Math.min(...bubbles.map((r) => r.left)))} 最右 ${Math.round(Math.max(...bubbles.map((r) => r.right)))}`
           : '没有气泡');
 
+      /* ---- 3b. 气泡上下分带（窄屏专属版式） ----
+         窄屏下「左右两栏」会退化成贴着右边缘的一整列 —— 实测 390×844 里
+         9 张卡全挤在 x=194，从 y=153 一直糊到 y=688，行迹正好被压在底下（用户截图）。
+         改成上下两条带之后，中间必须留出一条**没有任何卡片**的横带。
+         判据一律量渲染结果，不量「走了哪条分支」—— 分支名是意图，不是事实。 */
+      const bb = $$('#bubbleLayer .rb-bubble').map((e) => {
+        const r = e.getBoundingClientRect();
+        return { x: r.left, y: r.top, right: r.right, bottom: r.bottom, w: r.width, h: r.height };
+      });
+
+      /* 顶带贴顶、底带贴底。少了这条，「两带都挤在中间」也能满足「有空白带」。 */
+      const bandTop = Math.min(...bb.map((r) => r.y));
+      const bandBottom = Math.max(...bb.map((r) => r.bottom));
+      rec('气泡分上下两带：顶带贴顶、底带贴底',
+        bb.length > 0 && bandTop <= VH * 0.18 && bandBottom >= VH * 0.82,
+        `顶带 y=${Math.round(bandTop)}，底带 bottom=${Math.round(bandBottom)}（视口高 ${VH}）`);
+
+      /* 中间那条「让给地图」的空带 —— 这条需求的核心。
+         按「排」归并后取相邻两排之间的最大空隙，而不是看某个写死的坐标：
+         卡片高度是内容决定的（49~51px），写死坐标会在换诗人时假失败。 */
+      const rows = [...new Set(bb.map((r) => Math.round(r.y)))].sort((a, b) => a - b);
+      const rowBottom = (y) => Math.max(...bb.filter((r) => Math.round(r.y) === y).map((r) => r.bottom));
+      let gapMax = 0;
+      let gapAt = 0;
+      for (let i = 1; i < rows.length; i += 1) {
+        const g = rows[i] - rowBottom(rows[i - 1]);
+        if (g > gapMax) { gapMax = g; gapAt = Math.round(rowBottom(rows[i - 1])); }
+      }
+      rec('两带之间留出 ≥ 120px 空白横带（地图与行迹不被卡片压住）',
+        gapMax >= 120,
+        `最大空隙 ${Math.round(gapMax)}px（y=${gapAt} 起）`);
+
+      /* 抽屉开关钉在屏幕左右边缘各 30px（见 .panel-toggle），卡片不能压上去。 */
+      const onToggle = bb.filter((r) => r.x < 30 || r.right > VW - 30);
+      rec('气泡不压抽屉开关（左右各让开 30px）',
+        bb.length > 0 && onToggle.length === 0,
+        onToggle.length ? `${onToggle.length} 个越界` : `最左 ${Math.round(Math.min(...bb.map((r) => r.x)))} 最右 ${Math.round(Math.max(...bb.map((r) => r.right)))}`);
+
       realClick($('#toggleRoute'));
       await sleep(800);
       rec('点开关 → 面板回到原位', box('#routePanel').x >= 0,

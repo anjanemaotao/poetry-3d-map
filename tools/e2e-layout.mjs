@@ -52,13 +52,25 @@ for (const [w, h] of VIEWPORTS) {
   ab(['reload']);
   ab(['wait', '3400']);
 
+  /* 启动兜底：serve.py 是单线程 http.server，首屏要并发拉几十个模块，
+     偶发某个 import 超时（#lfMsg 显示 "Failed to fetch dynamically imported module"），
+     页面停在加载页 —— 这时脚本一读 window.__app 就抛异常，
+     表现为「某几个视口执行失败」，且每次失败的视口都不一样（实测确实如此），
+     看着像布局缺陷，其实是启动抖动。重载一次即可，不重试就会假红。 */
+  for (let i = 0; i < 4; i += 1) {
+    if (ab(['eval', '!!window.__app']).trim() === 'true') break;
+    if (i === 3) break;
+    ab(['reload']);
+    ab(['wait', '3400']);
+  }
+
   let res;
   try {
     /* 8 个视口 × 每个视口一套完整布局断言，单次 eval 必超时 —— 走 runScript。 */
     res = runScript(ab, script, { label: `e2e-layout.js @${w}x${h}` }).R;
   } catch (e) {
     results.push({ vp: `${w}x${h}`, bad: [`脚本执行失败：${e.message.split('\n')[0]}`] });
-    console.log(`✗ ${`${w}x${h}`.padEnd(10)} 执行失败`);
+    console.log(`✗ ${`${w}x${h}`.padEnd(10)} 执行失败 —— ${e.message.split('\n')[0].slice(0, 120)}`);
     continue;
   }
   results.push(res);

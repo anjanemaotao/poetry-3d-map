@@ -95,17 +95,24 @@ function freshPage(w, h) {
         看起来像功能坏了，其实是页面根本没打开 —— 必须先确认应用真的起来了。
      2) `open` 本身不稳定。连续 open 同一 URL 时约有一半概率停在 about:blank
         （实测 3 次里失败 1 次）；后面跟一次 `reload` 则连测 4 次全中。
-        所以顺序固定为 open → 设视口 → reload，不要只 open。 */
-  for (let attempt = 0; attempt < 3; attempt += 1) {
+        所以顺序固定为 open → 设视口 → reload，不要只 open。
+
+     判据用 window.__app，**不能**用 #searchInput：后者在静态 HTML 里就存在，
+     页面卡在加载页时照样为真。serve.py 是单线程 http.server，首屏并发拉几十个模块时
+     偶发某个 import 超时（#lfMsg 显示 "Failed to fetch dynamically imported module"），
+     此时 body 上不会有 narrow / hide-left 等任何类名 —— 窄屏那几条断言会集体假红。 */
+  for (let attempt = 0; attempt < 4; attempt += 1) {
     ab(['open', TARGET]);
     ab(['set', 'viewport', String(w), String(h)]);
     ab(['reload']);
     ab(['wait', '3200']);
     const booted = evalValue(
-      `!!document.querySelector('#searchInput') && document.body.children.length > 0 && location.href.indexOf('127.0.0.1') > 0`,
+      `!!window.__app && location.href.indexOf('127.0.0.1') > 0`,
     );
     if (booted === true) { resetFocus(); return; }
-    if (attempt === 2) throw new Error(`页面打不开（已重试 3 次）：${TARGET}`);
+    if (attempt === 3) {
+      throw new Error(`页面打不开（已重试 4 次）：${TARGET} / ${evalValue("document.querySelector('#lfMsg') ? document.querySelector('#lfMsg').textContent : '?'")}`);
+    }
   }
 }
 

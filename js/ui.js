@@ -13,6 +13,14 @@ const ERA_HEX = {
   read: '#8fb6d6',
 };
 
+/* 移动端气泡「上下分带」的启用门槛（视口宽，px）。
+ *
+ * 548 不是随手取的：宽屏走「左右两栏」，判据是停靠区宽 >= 184*2 + 160（中间留 160px 地图）；
+ * 视口 548 时停靠区正好 528，再窄两栏就不成立、退化成右栏一列 —— 那正是要改掉的形态。
+ * 所以「两栏不成立」与「该走上下分带」是同一条分界，写成一个常量，免得两处判据各漂各的。
+ */
+const BUBBLE_BAND_W = 548;
+
 export class UI {
   constructor(ctx) {
     this.ctx = ctx;
@@ -396,10 +404,14 @@ export class UI {
       btn.setAttribute('aria-expanded', hidden ? 'false' : 'true');
       btn.querySelector('.pt-arrow').textContent = hidden ? '›' : '‹';
     }
+    /* 停靠区缓存必须**无条件**作废，不能挂在 !opts.quiet 里面。
+       quiet 的语义是「别去同步开关和遮罩」（进入行迹模式时会安静地把面板打开），
+       而缓存失效跟界面同步是两件事 —— 实测挂在里面时，
+       进入行迹模式后 dock 会一直停在旧值，宽度算成 left > right 的负数区间。 */
+    this.invalidateDock();
     if (!opts.quiet) {
       this.syncPanelToggles();
       this.syncScrim();
-      this.invalidateDock();
     }
   }
 
@@ -1381,11 +1393,120 @@ export class UI {
    */
   measureBubbles() {
     this._bubbleSizes = new Map();
+    /* 移动端必须**先把宽度写进内联样式再量**：顺序反了量到的还是 CSS 的 156px，
+       之后按 156 排两列会溢出可用区。桌面端清掉内联宽度，回到 CSS 的 184px。 */
+    const m = window.innerWidth < BUBBLE_BAND_W ? this.bubbleBandMetrics() : null;
     this.bubbleEls.forEach((el, key) => {
+      el.style.width = m ? `${m.w}px` : '';
       this._bubbleSizes.set(key, { w: el.offsetWidth, h: el.offsetHeight });
     });
     // 视口一变，面板位置与宽度都可能变 —— 停靠带必须跟着重量
     this.invalidateDock();
+  }
+
+  /**
+   * 移动端气泡的列宽与列数。
+   *
+   * 横向区间**不读 dockRect()**，与 measureInset() 的取法保持一致：
+   * 窄屏下两栏与行迹面板都是盖在地图上的抽屉，不占版面，按 0 计。
+   * 这么做还顺带绕开两个坑（都是实测踩到的）：
+   *   - 抽屉展开时停靠区会退化成 left > right（实测 389 / 350），availW 变负数，
+   *     排出来的卡片全被甩到屏幕外（x=389，宽度还会算成 -39px 被浏览器丢弃）；
+   *   - dock 缓存只在部分事件里失效 —— 「安静打开行迹面板」那条路径
+   *     （setRoutePanelHidden(false, {quiet:true})）不失效，会读到旧值。
+   *
+   * 34 = 抽屉开关宽 30 + 4px 余量。开关钉在屏幕边缘（390 宽下实测 0..30 / 360..390），
+   * 卡片不能压在上面。
+   */
+  bubbleBandMetrics() {
+    const W = window.innerWidth;
+    const MARGIN = 34;
+    const availW = Math.max(120, W - MARGIN * 2);
+    const cssW = Math.min(156, W / 2 - 18);
+    const GAP_X = 8;
+    const two = Math.floor((availW - GAP_X) / 2);
+    /* 128 是可读下限：卡片头部是「序号 + 地名 + 年份」三段，
+       再窄地名就被省略号吃掉，卡片也就失去意义了。放不下就退回一列。 */
+    if (two >= 128) return { w: Math.min(two, cssW), cols: 2, gapX: GAP_X, margin: MARGIN };
+    return { w: Math.min(availW, cssW), cols: 1, gapX: 0, margin: MARGIN };
+  }
+
+  /**
+   * 移动端：卡片分成**上下两条带**，中间整条留空给地图与行迹。
+   *
+   * 为什么不能沿用宽屏那套左右两栏：窄屏上「两栏」就是贴着屏幕左右各一列，
+   * 中间那条 160px 的走廊比卡片本身还窄 —— 实测 390×844 下 9 张卡全挤在
+   * x=194 这一列，从 y=153 一直糊到 y=688，行迹正好压在底下（用户截图）。
+   *
+   * 分组按锚点的**屏幕纵坐标**对半切：靠上的锚点进上带、靠下的进下带。
+   * 与宽屏那套「按锚点横坐标分组」是同一个思路 —— 每条引线都短，
+   * 不会出现「上带的卡片指着屏幕最下方的点、一条线竖穿全图」。
+   *
+   * 别改用「行迹顺序的前半 / 后半」：`_bubbleStops` 并不按行迹顺序排
+   * （实测 libai 的 DOM 顺序是 峨眉山、庐山、黄鹤楼… 而不是幽州台打头），
+   * 按它切会把北边的站分到下带、南边的分到上带，九条引线互相穿插。
+   */
+  placeBands(items, dock, place) {
+    const cardW = items[0].w;
+    const m = this.bubbleBandMetrics();
+    const availW = Math.max(120, window.innerWidth - m.margin * 2);
+    const GAP_X = 8;
+    const cols = (cardW * 2 + GAP_X <= availW) ? 2 : 1;
+    const gapX = cols === 2 ? GAP_X : 0;
+
+    const byY = [...items].sort((a, b) => a.ay - b.ay);
+    const half = Math.ceil(byY.length / 2);
+    const topList = byY.slice(0, half);
+    const botList = byY.slice(half);
+
+    const rowsOf = (n) => Math.ceil(n / cols);
+    const rowHOf = (list) => list.reduce((mx, it) => Math.max(mx, it.h), 0);
+    const blockHOf = (list, g) => rowsOf(list.length) * rowHOf(list)
+      + g * Math.max(0, rowsOf(list.length) - 1);
+
+    /* 行距先按 8px 试算；两带加起来挤不下就压到 2px。
+       CLEAR_MIN 是**留给地图的那一条** —— 用户要的就是「中间别被卡片糊住」，
+       所以它是硬需求：宁可让两带贴得更紧，也不去动中间那条。
+       （390×844 实测：上带 169px + 下带 110px，中间还剩 369px，用不满这条规则。） */
+    const availH = Math.max(80, dock.bottom - dock.top);
+    const CLEAR_MIN = 120;
+    const slots = Math.max(0, rowsOf(topList.length) - 1) + Math.max(0, rowsOf(botList.length) - 1);
+    const bareH = rowsOf(topList.length) * rowHOf(topList)
+      + rowsOf(botList.length) * rowHOf(botList);
+    let gapY = 8;
+    if (bareH + gapY * slots > availH - CLEAR_MIN) {
+      gapY = Math.max(2, (availH - CLEAR_MIN - bareH) / Math.max(1, slots));
+    }
+
+    const topH = blockHOf(topList, gapY);
+    const botH = blockHOf(botList, gapY);
+    const topY = dock.top;
+    /* 下带贴着底栏往上排；再兜一道「不与上带相交」——
+       屏幕极矮时宁可溢出下边界，也不能让两带叠在一起。 */
+    let botY = dock.bottom - botH;
+    if (botY < topY + topH + 6) botY = topY + topH + 6;
+
+    /* 横向：**带内再按锚点横坐标分列**，靠左的锚点用左列、靠右的用右列。
+       这一层与宽屏那套两栏同源，作用也一样 —— 让引线基本不交叉。
+       少了它、只按纵坐标一行行填，会出现「左列的卡片指着屏幕最右边的点」，
+       九条引线在图上织成一张网（实测确实如此）。
+       列内再按纵坐标排，与地图上的高低顺序一致。
+       不满的那一排自然落在左列，**不做居中** —— 居中会把单张卡片推到画面正中，
+       正好压在地图上（实测峨眉山那张就落到了 x=117 的地图中央）。 */
+    const lay = (list, startY) => {
+      const byX = [...list].sort((a, b) => a.ax - b.ax);
+      const mid = Math.ceil(byX.length / 2);
+      const columns = cols === 2 ? [byX.slice(0, mid), byX.slice(mid)] : [byX];
+      const blockW = columns.length * cardW + (columns.length - 1) * gapX;
+      const x0 = m.margin + Math.max(0, (availW - blockW) / 2);
+      columns.forEach((col, c) => {
+        col.sort((a, b) => a.ay - b.ay).forEach((it, r) => {
+          place(it, x0 + c * (cardW + gapX), startY + r * (rowHOf(list) + gapY), 'band');
+        });
+      });
+    };
+    lay(topList, topY);
+    lay(botList, botY);
   }
 
   /**
@@ -1434,6 +1555,11 @@ export class UI {
       const r = visible(el);
       if (r && r.left < W - GAP - 8) right = Math.min(right, r.left - GAP);
     });
+    /* 兜底：面板盖满屏幕时（窄屏抽屉展开）「左右空白带」其实并不存在，
+       算出来会是 left > right 的空区间（实测 left=389 / right=350）。
+       拿它排版会把卡片甩到屏幕外，所以留不出宽度就退回整幅视口 ——
+       那种时候卡片本来就被抽屉挡在下面，退回视口不会多露出什么。 */
+    if (right - left < 160) { left = GAP; right = W - GAP; }
     this._dock = {
       left: Math.round(left),
       right: Math.round(right),
@@ -1444,14 +1570,16 @@ export class UI {
   }
 
   /**
-   * 每帧定位气泡：**停靠在左右两条空白带里**，不再压在地图上方。
+   * 每帧定位气泡：**停靠在空白带里**，不压在地图上。
    *
-   * 分工规则：
+   * 宽屏（视口 >= 548）走「左右两栏」：
    *   - 按锚点横坐标排序后对半分组：靠左的锚点用左栏，靠右的用右栏。
    *     这样引线基本不交叉，也不会出现「左栏的卡片指着最右边的点、一条线横穿全图」。
    *   - 栏内按锚点纵坐标自上而下排开，与地图上的高低顺序一致。
    *   - 空间不够时压缩间距（而不是重叠）—— 卡片高度是内容决定的，压不得。
-   *   - 窄屏（两栏是覆盖式抽屉、中间没有真正的空白带）只保留右栏一列。
+   *
+   * 窄屏（视口 < 548）走「上下两带」，见 placeBands ——
+   * 那边「两栏」会退化成贴着右边缘的一整列，把地图糊掉半边。
    *
    * @param {Array} entries 与 bubbleTargets() 一一对应的 [{x, y, visible}]
    */
@@ -1475,20 +1603,6 @@ export class UI {
         inset: e.inset || 0, offX: e.offX || 0, offY: e.offY || 0 });
     });
     if (!items.length) return;
-
-    const colW = items[0].w;
-    // 两列 + 中间至少留 160px 地图，否则不如只用一列
-    const twoCol = (dock.right - dock.left) >= colW * 2 + 160;
-
-    const byX = [...items].sort((a, b) => a.ax - b.ax);
-    const groups = [];
-    if (twoCol) {
-      const mid = Math.ceil(byX.length / 2);
-      groups.push({ side: 'left', list: byX.slice(0, mid) });
-      groups.push({ side: 'right', list: byX.slice(mid) });
-    } else {
-      groups.push({ side: 'right', list: byX });
-    }
 
     const place = (it, x, y, side) => {
       const el = it.el;
@@ -1569,6 +1683,27 @@ export class UI {
       el.style.setProperty('--dot-x', `${Math.round(endX)}px`);
       el.style.setProperty('--dot-y', `${Math.round(endY)}px`);
     };
+
+    /* 窄屏：上下分带，中间整条留给地图。宽屏：左右两栏 ——
+       两条竖带落在面板与地图之间的空白区里，中间留 160px 地图。 */
+    if (window.innerWidth < BUBBLE_BAND_W) {
+      this.placeBands(items, dock, place);
+      return;
+    }
+
+    const colW = items[0].w;
+    // 两列 + 中间至少留 160px 地图，否则不如只用一列
+    const twoCol = (dock.right - dock.left) >= colW * 2 + 160;
+
+    const byX = [...items].sort((a, b) => a.ax - b.ax);
+    const groups = [];
+    if (twoCol) {
+      const mid = Math.ceil(byX.length / 2);
+      groups.push({ side: 'left', list: byX.slice(0, mid) });
+      groups.push({ side: 'right', list: byX.slice(mid) });
+    } else {
+      groups.push({ side: 'right', list: byX });
+    }
 
     groups.forEach(({ side, list }) => {
       if (!list.length) return;
